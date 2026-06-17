@@ -1,0 +1,66 @@
+# Third-party / vendored dependencies (e.g. IBM Db2 CLI driver)
+third_party/
+
+# Build directories
+build/
+build-*/
+out/
+cmake-build-*/
+
+# CMake artifacts
+CMakeCache.txt
+CMakeFiles/
+CMakeUserPresets.json
+cmake_install.cmake
+install_manifest.txt
+CTestTestfile.cmake
+Testing/
+_deps/
+*.cmake.stamp
+
+# Compiled objects / libraries / executables
+*.o
+*.obj
+*.lo
+*.slo
+*.a
+*.lib
+*.so
+*.so.*
+*.dylib
+*.dll
+*.exe
+*.out
+*.app
+
+# Debug info
+*.dSYM/
+*.pdb
+*.ilk
+
+# Dependency / package managers
+vcpkg_installed/
+conan/
+.conan/
+
+# Test & coverage output
+*.gcno
+*.gcda
+*.gcov
+coverage/
+*.profraw
+*.profdata
+Testing/Temporary/
+
+# Editor / IDE
+.vscode/
+.idea/
+.cache/
+compile_commands.json
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
