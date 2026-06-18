@@ -12,6 +12,7 @@ endif()
 option(HALCYON_WITH_PROMETHEUS "Build prometheus-cpp metrics adapter" OFF)
 option(HALCYON_WITH_OTEL "Build opentelemetry-cpp tracing adapter" OFF)
 option(HALCYON_BUILD_TESTS "Build tests" ON)
+option(HALCYON_BUILD_INTEGRATION_TESTS "Build Dockerized Db2 integration tests" OFF)
 option(HALCYON_BUILD_EXAMPLES "Build examples" OFF)
 option(HALCYON_WARNINGS_AS_ERRORS "Treat warnings as errors" OFF)
 
