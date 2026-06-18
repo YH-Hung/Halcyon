@@ -1,35 +1,76 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <string>
+#include <variant>
+#include <vector>
 
 #include "halcyon/result.hpp"
 
 namespace halcyon::detail::cli {
 
-// Opaque handle to a physical connection owned by a driver implementation.
-// 0 is reserved as the invalid handle.
 enum class ConnectionHandle : std::uint64_t { invalid = 0 };
+
+// Opaque handle to a prepared statement owned by a driver implementation.
+enum class StatementHandle : std::uint64_t { invalid = 0 };
 
 struct ConnectionParams {
     std::string connectionString;
 };
 
-// Thin seam over a Db2 CLI driver. The only interface the core/pool depend on
-// for establishing and checking physical connections. Implementations must be
-// safe to call from the thread that currently owns a given handle.
+// Marker for SQL NULL inside a boundary Value.
+struct Null {};
+inline bool operator==(const Null&, const Null&) noexcept { return true; }
+inline bool operator!=(const Null&, const Null&) noexcept { return false; }
+
+// CLI-agnostic value exchanged across the seam: how the core passes parameters
+// down and reads columns up without leaking sqlcli1.h C types above the seam.
+// Integers arrive as int64; floating point as double; text as UTF-8 string;
+// binary as bytes; SQL NULL as Null. bool is bind-only-distinct (a boolean
+// column is read back as int64).
+using Value = std::variant<Null, bool, std::int64_t, double, std::string,
+                           std::vector<std::byte>>;
+
 class ICliDriver {
 public:
     virtual ~ICliDriver() = default;
 
-    // Establishes a physical connection. On success returns a non-invalid handle.
+    // --- Connection lifecycle (Plan 1) ---
     virtual Result<ConnectionHandle> connect(const ConnectionParams& params) = 0;
-
-    // Releases a previously returned handle. Idempotent for already-closed handles.
     virtual Result<void> disconnect(ConnectionHandle handle) = 0;
-
-    // Lightweight liveness probe (e.g. validation query) for the handle.
     virtual Result<bool> isAlive(ConnectionHandle handle) = 0;
+
+    // --- Prepared-statement data path (Plan 2) ---
+
+    // Prepares sql on conn; returns a non-invalid statement handle on success.
+    virtual Result<StatementHandle> prepare(ConnectionHandle conn,
+                                            const std::string& sql) = 0;
+
+    // Binds positional parameters (vector index 0 == first '?') before execute.
+    virtual Result<void> bindParams(StatementHandle stmt,
+                                    const std::vector<Value>& params) = 0;
+
+    // Executes the statement. Returns rows affected for DML (>= 0); for a
+    // result-set-producing statement the count is implementation-defined (0)
+    // and the cursor becomes fetchable.
+    virtual Result<std::int64_t> execute(StatementHandle stmt) = 0;
+
+    // Number of columns in the active result set (0 when none).
+    virtual Result<std::size_t> columnCount(StatementHandle stmt) = 0;
+
+    // Name of the 0-based column (may be empty for unnamed expressions).
+    virtual Result<std::string> columnName(StatementHandle stmt,
+                                           std::size_t index) = 0;
+
+    // Advances the cursor. true => a row is available; false => end of result.
+    virtual Result<bool> fetch(StatementHandle stmt) = 0;
+
+    // Reads the current row's 0-based column as a neutral Value.
+    virtual Result<Value> getColumn(StatementHandle stmt, std::size_t index) = 0;
+
+    // Releases a statement handle. Idempotent for already-finalized handles.
+    virtual Result<void> finalize(StatementHandle stmt) = 0;
 };
 
 }  // namespace halcyon::detail::cli

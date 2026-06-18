@@ -27,6 +27,29 @@ if(DB2CLI_FOUND AND NOT TARGET DB2::CLI)
         INTERFACE_INCLUDE_DIRECTORIES "${DB2CLI_INCLUDE_DIR}")
     # Bake an RPATH so executables find libdb2 without LD_LIBRARY_PATH/DYLD_LIBRARY_PATH.
     set(DB2CLI_LIBRARY_DIR "${DB2_CLIDRIVER_ROOT}/lib" CACHE PATH "Db2 CLI lib dir")
+
+    # macOS: the vendored libdb2 ships with a bare install name ("libdb2.dylib").
+    # dyld does not search RPATH for bare dependent names, so any executable that
+    # links (even transitively) against it fails to load. Rewrite the install
+    # name to be @rpath-relative (idempotent) so the baked RPATH resolves it.
+    if(APPLE)
+        execute_process(
+            COMMAND otool -D "${DB2CLI_LIBRARY}"
+            OUTPUT_VARIABLE _db2_install_name
+            ERROR_QUIET)
+        if(NOT _db2_install_name MATCHES "@rpath/libdb2.dylib")
+            find_program(INSTALL_NAME_TOOL NAMES install_name_tool)
+            if(INSTALL_NAME_TOOL)
+                execute_process(COMMAND "${INSTALL_NAME_TOOL}"
+                    -id @rpath/libdb2.dylib "${DB2CLI_LIBRARY}")
+                message(STATUS
+                    "DB2CLI: rewrote install name of ${DB2CLI_LIBRARY} to @rpath/libdb2.dylib")
+            else()
+                message(WARNING
+                    "DB2CLI: install_name_tool not found; libdb2 may not load via RPATH on macOS")
+            endif()
+        endif()
+    endif()
 endif()
 
 mark_as_advanced(DB2CLI_INCLUDE_DIR DB2CLI_LIBRARY)

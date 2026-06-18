@@ -1,27 +1,54 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <deque>
+#include <map>
+#include <string>
 #include <vector>
 
 #include "halcyon/detail/cli/driver.hpp"
 
 namespace halcyon::testing {
 
+// A scriptable fake driver: queue connect/prepare/execute outcomes and result
+// grids so the entire core (binding, mapping, iteration) can be tested with no
+// live Db2.
 class MockCliDriver final : public detail::cli::ICliDriver {
 public:
     using ConnectionHandle = detail::cli::ConnectionHandle;
+    using StatementHandle = detail::cli::StatementHandle;
     using ConnectionParams = detail::cli::ConnectionParams;
+    using Value = detail::cli::Value;
 
-    // If non-empty, the next connect() pops and returns this error instead.
+    struct ScriptedRows {
+        std::vector<std::string> columns;
+        std::vector<std::vector<Value>> rows;
+    };
+
+    struct StmtState {
+        std::string sql;
+        std::vector<Value> boundParams;
+        ScriptedRows cursor;
+        long position = -1;  // -1 before first fetch
+    };
+
+    // --- connect scripting (Plan 1) ---
     std::deque<Error> connectErrors;
-    // Controls what isAlive() reports for the next call(s); defaults to true.
     std::deque<bool> aliveResults;
-
     int connectCalls = 0;
     int disconnectCalls = 0;
     int aliveCalls = 0;
     std::vector<ConnectionParams> connectParams;
+
+    // --- statement scripting (Plan 2) ---
+    std::deque<Error> prepareErrors;
+    std::deque<Error> executeErrors;
+    std::deque<ScriptedRows> resultSets;     // execute() attaches the next one
+    std::deque<std::int64_t> execRowCounts;  // execute() returns the next one
+
+    std::vector<std::string> preparedSql;
+    std::map<StatementHandle, StmtState> statements;
 
     Result<ConnectionHandle> connect(const ConnectionParams& params) override {
         ++connectCalls;
@@ -32,7 +59,7 @@ public:
             return Result<ConnectionHandle>(e);
         }
         return Result<ConnectionHandle>(
-            static_cast<ConnectionHandle>(++nextHandle_));
+            static_cast<ConnectionHandle>(++nextConn_));
     }
 
     Result<void> disconnect(ConnectionHandle handle) override {
@@ -52,8 +79,100 @@ public:
         return Result<bool>(true);
     }
 
+    Result<StatementHandle> prepare(ConnectionHandle conn,
+                                    const std::string& sql) override {
+        (void)conn;
+        if (!prepareErrors.empty()) {
+            Error e = prepareErrors.front();
+            prepareErrors.pop_front();
+            return Result<StatementHandle>(e);
+        }
+        preparedSql.push_back(sql);
+        auto h = static_cast<StatementHandle>(++nextStmt_);
+        statements[h] = StmtState{sql, {}, {}, -1};
+        return Result<StatementHandle>(h);
+    }
+
+    Result<void> bindParams(StatementHandle stmt,
+                            const std::vector<Value>& params) override {
+        statements.at(stmt).boundParams = params;
+        return Result<void>();
+    }
+
+    Result<std::int64_t> execute(StatementHandle stmt) override {
+        if (!executeErrors.empty()) {
+            Error e = executeErrors.front();
+            executeErrors.pop_front();
+            return Result<std::int64_t>(e);
+        }
+        auto& s = statements.at(stmt);
+        s.position = -1;
+        if (!resultSets.empty()) {
+            s.cursor = resultSets.front();
+            resultSets.pop_front();
+            return Result<std::int64_t>(std::int64_t{0});
+        }
+        s.cursor = ScriptedRows{};
+        if (!execRowCounts.empty()) {
+            std::int64_t n = execRowCounts.front();
+            execRowCounts.pop_front();
+            return Result<std::int64_t>(n);
+        }
+        return Result<std::int64_t>(std::int64_t{0});
+    }
+
+    Result<std::size_t> columnCount(StatementHandle stmt) override {
+        return Result<std::size_t>(statements.at(stmt).cursor.columns.size());
+    }
+
+    Result<std::string> columnName(StatementHandle stmt,
+                                   std::size_t index) override {
+        const auto& cols = statements.at(stmt).cursor.columns;
+        if (index >= cols.size()) return Result<std::string>(rangeError());
+        return Result<std::string>(cols[index]);
+    }
+
+    Result<bool> fetch(StatementHandle stmt) override {
+        auto& s = statements.at(stmt);
+        ++s.position;
+        return Result<bool>(s.position <
+                            static_cast<long>(s.cursor.rows.size()));
+    }
+
+    Result<Value> getColumn(StatementHandle stmt, std::size_t index) override {
+        auto& s = statements.at(stmt);
+        if (s.position < 0 ||
+            s.position >= static_cast<long>(s.cursor.rows.size())) {
+            return Result<Value>(rangeError());
+        }
+        const auto& row = s.cursor.rows[static_cast<std::size_t>(s.position)];
+        if (index >= row.size()) return Result<Value>(rangeError());
+        return Result<Value>(row[index]);
+    }
+
+    Result<void> finalize(StatementHandle stmt) override {
+        // Retain the recorded StmtState (bound params, last cursor) so tests can
+        // still introspect a statement after the owning Statement/ResultSet has
+        // been destroyed (handles are never reused, so this can't alias). Record
+        // the finalize for assertions that care.
+        ++finalizeCalls;
+        finalized.push_back(stmt);
+        return Result<void>();
+    }
+
+    int finalizeCalls = 0;
+    std::vector<StatementHandle> finalized;
+
 private:
-    std::uint64_t nextHandle_ = 0;
+    static Error rangeError() {
+        Error e;
+        e.code = ErrorCode::Mapping;
+        e.message = "column index out of range";
+        return e;
+    }
+
+    std::uint64_t nextConn_ = 0;
+    std::uint64_t nextStmt_ = 0;
 };
 
 }  // namespace halcyon::testing
