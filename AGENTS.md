@@ -49,15 +49,63 @@ leak `sqlcli1.h` types into public headers.
 ```bash
 cmake -S . -B build -DHALCYON_BUILD_TESTS=ON
 cmake --build build -j
-ctest --test-dir build --output-on-failure          # unit tests
-ctest --test-dir build -L integration               # integration (needs Docker Db2)
+ctest --test-dir build --output-on-failure          # unit tests (mock the seam, no DB)
 ```
 
 Key CMake options: `HALCYON_WITH_PROMETHEUS`, `HALCYON_WITH_OTEL`,
-`HALCYON_BUILD_TESTS`, `HALCYON_BUILD_EXAMPLES`, `HALCYON_WARNINGS_AS_ERRORS`.
+`HALCYON_BUILD_TESTS`, `HALCYON_BUILD_INTEGRATION_TESTS`, `HALCYON_BUILD_EXAMPLES`,
+`HALCYON_WARNINGS_AS_ERRORS`.
 The vendored driver is found at `third_party/clidriver`; override with
 `-DDB2_CLIDRIVER_ROOT=...`. The driver lib dir is added to the RPATH, so examples
-and tests run without setting `LD_LIBRARY_PATH`/`DYLD_LIBRARY_PATH`.
+and tests run without setting `LD_LIBRARY_PATH`/`DYLD_LIBRARY_PATH`. On macOS,
+`FindDB2CLI.cmake` rewrites `libdb2.dylib`'s bare install name to
+`@rpath/libdb2.dylib` at configure time (idempotent) so the RPATH actually
+resolves it — dyld does not search RPATH for bare dependent names.
+
+### Integration tests against live Db2 (Docker)
+
+The integration suite (`tests/integration/`, CTest label `integration`) is
+opt-in and only *runs* when `HALCYON_TEST_DSN` is set; otherwise each test
+reports as skipped. The full verified procedure:
+
+```bash
+# 1. Configure + build with the integration target enabled.
+cmake -S . -B build -DHALCYON_BUILD_TESTS=ON -DHALCYON_BUILD_INTEGRATION_TESTS=ON
+cmake --build build -j
+
+# 2. Start Db2 and wait until the container reports healthy (first boot creates
+#    the SAMPLE database; ~2 min native, longer under amd64 emulation on arm64).
+docker compose -f docker/docker-compose.yml up -d
+docker compose -f docker/docker-compose.yml ps   # wait for STATUS = healthy
+
+# 3. Point the tests at the container and run them.
+export HALCYON_TEST_DSN="DATABASE=SAMPLE;HOSTNAME=localhost;PORT=50000;UID=db2inst1;PWD=halcyon;"
+ctest --test-dir build -L integration --output-on-failure
+
+# 4. Tear down when done.
+docker compose -f docker/docker-compose.yml down
+```
+
+The compose file (`docker/docker-compose.yml`) uses `icr.io/db2_community/db2`
+with `DBNAME=SAMPLE` and `DB2INST1_PASSWORD=halcyon` on port `50000`, matching
+the DSN above.
+
+**macOS one-time step (Gatekeeper / GSKit).** The vendored driver `dlopen`s its
+IBM GSKit security libraries (`third_party/clidriver/lib/icc/libgsk8*.dylib`)
+during `connect`. Those binaries are unsigned and arrive with the
+`com.apple.quarantine` attribute, so Gatekeeper blocks the load and `connect`
+fails with `SQL1042C ... SQLSTATE=58004` (and Finder/XProtect flags
+`libgsk8sys.dylib` as malware). If you trust the source of your vendored driver,
+clear quarantine once after fetching it (the files are read-only, so make them
+writable first):
+
+```bash
+chmod -R u+w third_party/clidriver
+xattr -r -d com.apple.quarantine third_party/clidriver
+```
+
+This disables a macOS security mitigation on those binaries — only do it for a
+driver whose provenance you trust.
 
 ## Conventions
 
