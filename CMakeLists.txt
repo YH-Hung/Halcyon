@@ -20,7 +20,8 @@ find_package(DB2CLI REQUIRED)
 
 add_library(halcyon
     src/core/version.cpp
-    src/core/error.cpp)
+    src/core/error.cpp
+    src/detail/cli/sqlstate.cpp)
 add_library(halcyon::halcyon ALIAS halcyon)
 
 target_include_directories(halcyon
