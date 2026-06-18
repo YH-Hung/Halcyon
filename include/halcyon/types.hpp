@@ -6,6 +6,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -183,3 +184,91 @@ Result<std::decay_t<T>> from_value(const detail::cli::Value& v) {
 }  // namespace detail
 
 }  // namespace halcyon
+
+namespace halcyon {
+namespace reflect {
+
+// Primary: a type is not reflected unless HALCYON_REFLECT specializes this.
+template <class T>
+struct Reflected : std::false_type {
+    static constexpr std::size_t field_count = 0;
+};
+
+// Assigns each column (by position) into the struct via its member pointers.
+template <class T, class Tuple, std::size_t... I>
+Result<void> assign_fields(T& out, const Tuple& mptrs,
+                           detail::cli::ICliDriver& driver,
+                           detail::cli::StatementHandle stmt,
+                           std::index_sequence<I...>) {
+    Error err;
+    bool ok = true;
+    auto step = [&](auto idx) {
+        if (!ok) return;
+        constexpr std::size_t i = decltype(idx)::value;
+        auto mp = std::get<i>(mptrs);
+        using F = std::remove_reference_t<decltype(out.*mp)>;
+        auto cell = driver.getColumn(stmt, i);
+        if (!cell.ok()) { ok = false; err = cell.error(); return; }
+        auto v = TypeBinder<F>::from_value(cell.value());
+        if (!v.ok()) { ok = false; err = v.error(); return; }
+        out.*mp = std::move(v.value());
+    };
+    (step(std::integral_constant<std::size_t, I>{}), ...);
+    if (!ok) return err;
+    return Result<void>();
+}
+
+// Maps the current cursor row into a freshly value-initialized T.
+template <class T>
+Result<T> map_row(detail::cli::ICliDriver& driver,
+                  detail::cli::StatementHandle stmt, std::size_t columns) {
+    static_assert(Reflected<T>::value,
+                  "queryAs<T> requires HALCYON_REFLECT(T, fields...)");
+    constexpr std::size_t N = Reflected<T>::field_count;
+    if (columns != N)
+        return detail::mapping_error("queryAs<T>: column count != field count");
+    auto mptrs = Reflected<T>::members();
+    T out{};
+    auto r = assign_fields(out, mptrs, driver, stmt, std::make_index_sequence<N>{});
+    if (!r.ok()) return r.error();
+    return out;
+}
+
+}  // namespace reflect
+}  // namespace halcyon
+
+// ---- HALCYON_REFLECT macro (global scope) ----
+// Expands field names to a tuple of member pointers and specializes Reflected<T>.
+#define HALCYON_PP_EXPAND(x) x
+#define HALCYON_PP_CAT(a, b) HALCYON_PP_CAT_(a, b)
+#define HALCYON_PP_CAT_(a, b) a##b
+
+#define HALCYON_PP_NARG(...) \
+    HALCYON_PP_EXPAND(HALCYON_PP_NARG_(__VA_ARGS__, HALCYON_PP_RSEQ()))
+#define HALCYON_PP_NARG_(...) HALCYON_PP_EXPAND(HALCYON_PP_ARG_N(__VA_ARGS__))
+#define HALCYON_PP_ARG_N(_1, _2, _3, _4, _5, _6, _7, _8, _9, _10, N, ...) N
+#define HALCYON_PP_RSEQ() 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0
+
+#define HALCYON_MP(T, field) &T::field
+#define HALCYON_FE_1(T, a) HALCYON_MP(T, a)
+#define HALCYON_FE_2(T, a, ...) HALCYON_MP(T, a), HALCYON_PP_EXPAND(HALCYON_FE_1(T, __VA_ARGS__))
+#define HALCYON_FE_3(T, a, ...) HALCYON_MP(T, a), HALCYON_PP_EXPAND(HALCYON_FE_2(T, __VA_ARGS__))
+#define HALCYON_FE_4(T, a, ...) HALCYON_MP(T, a), HALCYON_PP_EXPAND(HALCYON_FE_3(T, __VA_ARGS__))
+#define HALCYON_FE_5(T, a, ...) HALCYON_MP(T, a), HALCYON_PP_EXPAND(HALCYON_FE_4(T, __VA_ARGS__))
+#define HALCYON_FE_6(T, a, ...) HALCYON_MP(T, a), HALCYON_PP_EXPAND(HALCYON_FE_5(T, __VA_ARGS__))
+#define HALCYON_FE_7(T, a, ...) HALCYON_MP(T, a), HALCYON_PP_EXPAND(HALCYON_FE_6(T, __VA_ARGS__))
+#define HALCYON_FE_8(T, a, ...) HALCYON_MP(T, a), HALCYON_PP_EXPAND(HALCYON_FE_7(T, __VA_ARGS__))
+#define HALCYON_FE_9(T, a, ...) HALCYON_MP(T, a), HALCYON_PP_EXPAND(HALCYON_FE_8(T, __VA_ARGS__))
+#define HALCYON_FE_10(T, a, ...) HALCYON_MP(T, a), HALCYON_PP_EXPAND(HALCYON_FE_9(T, __VA_ARGS__))
+#define HALCYON_MEMBER_PTRS(T, ...) \
+    HALCYON_PP_EXPAND(HALCYON_PP_CAT(HALCYON_FE_, HALCYON_PP_NARG(__VA_ARGS__))(T, __VA_ARGS__))
+
+// Supports up to 10 fields; extend the HALCYON_FE_<n>/HALCYON_PP_* ladder for more.
+#define HALCYON_REFLECT(Type, ...)                                          \
+    template <>                                                             \
+    struct halcyon::reflect::Reflected<Type> : std::true_type {             \
+        static constexpr std::size_t field_count = HALCYON_PP_NARG(__VA_ARGS__); \
+        static auto members() {                                             \
+            return std::make_tuple(HALCYON_MEMBER_PTRS(Type, __VA_ARGS__)); \
+        }                                                                   \
+    }

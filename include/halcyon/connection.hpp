@@ -270,7 +270,46 @@ public:
         return driver_->execute(st.value().handle());
     }
 
+    // --- struct-mapping overloads (require HALCYON_REFLECT(T, ...)) ---
+    template <class T, class... Args,
+              std::enable_if_t<(is_bindable<Args>::value && ...), int> = 0>
+    Result<std::vector<T>> queryAs(const std::string& sql, const Args&... args) {
+        auto st = prepare(sql);
+        if (!st.ok()) return st.error();
+        return collect<T>(st.value(), detail::pack_params(args...));
+    }
+
+    template <class T>
+    Result<std::vector<T>> queryAs(const std::string& sql, const params& named) {
+        auto pre = detail::bind_named(sql, named);
+        if (!pre.ok()) return pre.error();
+        auto st = prepare(pre.value().sql);
+        if (!st.ok()) return st.error();
+        return collect<T>(st.value(), pre.value().params);
+    }
+
 private:
+    template <class T>
+    Result<std::vector<T>> collect(Statement& st,
+                                   const std::vector<detail::cli::Value>& params) {
+        auto b = driver_->bindParams(st.handle(), params);
+        if (!b.ok()) return b.error();
+        auto e = driver_->execute(st.handle());
+        if (!e.ok()) return e.error();
+        auto cc = driver_->columnCount(st.handle());
+        if (!cc.ok()) return cc.error();
+        std::vector<T> out;
+        for (;;) {
+            auto f = driver_->fetch(st.handle());
+            if (!f.ok()) return f.error();
+            if (!f.value()) break;
+            auto row = reflect::map_row<T>(*driver_, st.handle(), cc.value());
+            if (!row.ok()) return row.error();
+            out.push_back(std::move(row.value()));
+        }
+        return out;
+    }
+
     // Builds a ResultSet that OWNS the statement (kept alive for the cursor).
     Result<ResultSet> run_query(Statement&& st,
                                 const std::vector<detail::cli::Value>& params) {

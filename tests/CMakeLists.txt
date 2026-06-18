@@ -14,7 +14,8 @@ add_executable(halcyon_unit_tests
     unit/test_type_binder.cpp
     unit/test_parameters.cpp
     unit/test_result_set.cpp
-    unit/test_connection.cpp)
+    unit/test_connection.cpp
+    unit/test_reflect.cpp)
 
 target_link_libraries(halcyon_unit_tests
     PRIVATE halcyon::halcyon GTest::gtest_main)
