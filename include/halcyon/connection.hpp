@@ -1,8 +1,10 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <iterator>
 #include <optional>
+#include <string>
 #include <tuple>
 #include <utility>
 #include <vector>
@@ -14,6 +16,8 @@
 #include "halcyon/types.hpp"
 
 namespace halcyon {
+
+class ResultSet;  // fwd
 
 // A non-owning view of the current cursor row. Valid only at the iterator's
 // current position (forward-only); reads columns lazily via the seam.
@@ -66,6 +70,59 @@ private:
     detail::cli::ICliDriver* driver_;
     detail::cli::StatementHandle stmt_;
     std::size_t columns_;
+};
+
+// A prepared, reusable statement. Owns its driver statement handle and finalizes
+// it on destruction. Move-only.
+class Statement {
+public:
+    Statement(detail::cli::ICliDriver& driver, detail::cli::StatementHandle handle)
+        : driver_(&driver), handle_(handle) {}
+
+    Statement(Statement&& o) noexcept
+        : driver_(o.driver_), handle_(o.handle_) {
+        o.handle_ = detail::cli::StatementHandle::invalid;
+    }
+    Statement& operator=(Statement&& o) noexcept {
+        if (this != &o) {
+            reset();
+            driver_ = o.driver_;
+            handle_ = o.handle_;
+            o.handle_ = detail::cli::StatementHandle::invalid;
+        }
+        return *this;
+    }
+    Statement(const Statement&) = delete;
+    Statement& operator=(const Statement&) = delete;
+    ~Statement() { reset(); }
+
+    detail::cli::StatementHandle handle() const noexcept { return handle_; }
+
+    // Binds params, executes, and returns a borrowing ResultSet (valid until the
+    // next exec on this statement or until *this is destroyed). Defined out of
+    // line below, once ResultSet is complete.
+    template <class... Args>
+    Result<ResultSet> execute_query(const Args&... args);
+
+    template <class... Args>
+    Result<std::int64_t> execute_update(const Args&... args) {
+        return exec(detail::pack_params(args...));
+    }
+
+private:
+    Result<std::int64_t> exec(const std::vector<detail::cli::Value>& params) {
+        auto b = driver_->bindParams(handle_, params);
+        if (!b.ok()) return b.error();
+        return driver_->execute(handle_);
+    }
+    void reset() {
+        if (driver_ && handle_ != detail::cli::StatementHandle::invalid) {
+            driver_->finalize(handle_);
+            handle_ = detail::cli::StatementHandle::invalid;
+        }
+    }
+    detail::cli::ICliDriver* driver_;
+    detail::cli::StatementHandle handle_;
 };
 
 // A forward-only result cursor over a statement. May borrow the statement
@@ -123,10 +180,119 @@ private:
               std::size_t columns)
         : driver_(driver), stmt_(stmt), columns_(columns) {}
 
-    friend class Connection;  // for the owning-ResultSet constructor in Task 5
+    friend class Connection;  // for the owning-ResultSet constructor
     detail::cli::ICliDriver* driver_;
     detail::cli::StatementHandle stmt_;
     std::size_t columns_;
+    std::optional<Statement> owned_;  // present when the ResultSet owns its statement
+};
+
+// Out-of-line definition now that ResultSet is complete.
+template <class... Args>
+Result<ResultSet> Statement::execute_query(const Args&... args) {
+    auto pre = exec(detail::pack_params(args...));
+    if (!pre.ok()) return pre.error();
+    return ResultSet::create_borrowing(*driver_, handle_);
+}
+
+// A single logical connection over the seam. Owns the physical connection handle
+// and disconnects on destruction. Move-only; not safe for concurrent use by
+// multiple threads (matches CLI handle semantics).
+class Connection {
+public:
+    static Result<Connection> open(detail::cli::ICliDriver& driver,
+                                   const detail::cli::ConnectionParams& params) {
+        auto h = driver.connect(params);
+        if (!h.ok()) return h.error();
+        return Connection(driver, h.value());
+    }
+
+    Connection(detail::cli::ICliDriver& driver, detail::cli::ConnectionHandle handle)
+        : driver_(&driver), handle_(handle) {}
+
+    Connection(Connection&& o) noexcept : driver_(o.driver_), handle_(o.handle_) {
+        o.handle_ = detail::cli::ConnectionHandle::invalid;
+    }
+    Connection& operator=(Connection&& o) noexcept {
+        if (this != &o) {
+            reset();
+            driver_ = o.driver_;
+            handle_ = o.handle_;
+            o.handle_ = detail::cli::ConnectionHandle::invalid;
+        }
+        return *this;
+    }
+    Connection(const Connection&) = delete;
+    Connection& operator=(const Connection&) = delete;
+    ~Connection() { reset(); }
+
+    detail::cli::ConnectionHandle handle() const noexcept { return handle_; }
+
+    Result<Statement> prepare(const std::string& sql) {
+        auto h = driver_->prepare(handle_, sql);
+        if (!h.ok()) return h.error();
+        return Statement(*driver_, h.value());
+    }
+
+    // --- anonymous-parameter overloads (enabled only when all Args bind) ---
+    template <class... Args,
+              std::enable_if_t<(is_bindable<Args>::value && ...), int> = 0>
+    Result<ResultSet> query(const std::string& sql, const Args&... args) {
+        auto st = prepare(sql);
+        if (!st.ok()) return st.error();
+        return run_query(std::move(st.value()), detail::pack_params(args...));
+    }
+
+    template <class... Args,
+              std::enable_if_t<(is_bindable<Args>::value && ...), int> = 0>
+    Result<std::int64_t> execute(const std::string& sql, const Args&... args) {
+        auto st = prepare(sql);
+        if (!st.ok()) return st.error();
+        return st.value().execute_update(args...);
+    }
+
+    // --- named-parameter overloads ---
+    Result<ResultSet> query(const std::string& sql, const params& named) {
+        auto pre = detail::bind_named(sql, named);
+        if (!pre.ok()) return pre.error();
+        auto st = prepare(pre.value().sql);
+        if (!st.ok()) return st.error();
+        return run_query(std::move(st.value()), pre.value().params);
+    }
+
+    Result<std::int64_t> execute(const std::string& sql, const params& named) {
+        auto pre = detail::bind_named(sql, named);
+        if (!pre.ok()) return pre.error();
+        auto st = prepare(pre.value().sql);
+        if (!st.ok()) return st.error();
+        auto b = driver_->bindParams(st.value().handle(), pre.value().params);
+        if (!b.ok()) return b.error();
+        return driver_->execute(st.value().handle());
+    }
+
+private:
+    // Builds a ResultSet that OWNS the statement (kept alive for the cursor).
+    Result<ResultSet> run_query(Statement&& st,
+                                const std::vector<detail::cli::Value>& params) {
+        auto b = driver_->bindParams(st.handle(), params);
+        if (!b.ok()) return b.error();
+        auto e = driver_->execute(st.handle());
+        if (!e.ok()) return e.error();
+        auto cc = driver_->columnCount(st.handle());
+        if (!cc.ok()) return cc.error();
+        ResultSet rs(driver_, st.handle(), cc.value());
+        rs.owned_ = std::move(st);
+        return rs;
+    }
+
+    void reset() {
+        if (driver_ && handle_ != detail::cli::ConnectionHandle::invalid) {
+            driver_->disconnect(handle_);
+            handle_ = detail::cli::ConnectionHandle::invalid;
+        }
+    }
+    detail::cli::ICliDriver* driver_;
+    detail::cli::ConnectionHandle handle_;
 };
 
 }  // namespace halcyon

@@ -151,9 +151,17 @@ public:
     }
 
     Result<void> finalize(StatementHandle stmt) override {
-        statements.erase(stmt);
+        // Retain the recorded StmtState (bound params, last cursor) so tests can
+        // still introspect a statement after the owning Statement/ResultSet has
+        // been destroyed (handles are never reused, so this can't alias). Record
+        // the finalize for assertions that care.
+        ++finalizeCalls;
+        finalized.push_back(stmt);
         return Result<void>();
     }
+
+    int finalizeCalls = 0;
+    std::vector<StatementHandle> finalized;
 
 private:
     static Error rangeError() {
