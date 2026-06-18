@@ -19,7 +19,8 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 find_package(DB2CLI REQUIRED)
 
 add_library(halcyon
-    src/core/version.cpp)
+    src/core/version.cpp
+    src/core/error.cpp)
 add_library(halcyon::halcyon ALIAS halcyon)
 
 target_include_directories(halcyon
