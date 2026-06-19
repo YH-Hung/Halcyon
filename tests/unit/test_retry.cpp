@@ -98,3 +98,31 @@ TEST(IsReadOnly, RecognizesSafeStatements) {
     EXPECT_FALSE(is_read_only("DELETE FROM t"));
     EXPECT_FALSE(is_read_only(""));
 }
+
+TEST(IsReadOnly, RequiresWordBoundaryAfterKeyword) {
+    using halcyon::detail::is_read_only;
+    // Leading characters match a keyword but the token is a different word.
+    EXPECT_FALSE(is_read_only("WITHOUT ROWID x"));
+    EXPECT_FALSE(is_read_only("SELECTED VALUES FROM t"));
+    EXPECT_FALSE(is_read_only("VALUESX (1)"));
+    // A keyword terminated by end-of-string or a paren is still a real keyword.
+    EXPECT_TRUE(is_read_only("SELECT"));
+    EXPECT_TRUE(is_read_only("VALUES(1)"));
+}
+
+TEST(IsReadOnly, WithMustResolveToSelectNotDataChange) {
+    using halcyon::detail::is_read_only;
+    // WITH … SELECT is read-only.
+    EXPECT_TRUE(is_read_only("WITH t AS (SELECT 1) SELECT * FROM t"));
+    EXPECT_TRUE(is_read_only("with a AS (SELECT 1), b AS (SELECT 2) "
+                             "SELECT * FROM a JOIN b ON a.x = b.x"));
+    // A data-change verb inside a CTE body (parenthesised / quoted) must not
+    // fool the classifier: the main statement is still a SELECT.
+    EXPECT_TRUE(is_read_only("WITH t AS (SELECT 'DELETE' FROM s) SELECT * FROM t"));
+    // WITH feeding a data-change statement is NOT safe to auto-retry.
+    EXPECT_FALSE(is_read_only("WITH t AS (SELECT 1) DELETE FROM x"));
+    EXPECT_FALSE(is_read_only("WITH t AS (SELECT 1) INSERT INTO x SELECT * FROM t"));
+    EXPECT_FALSE(is_read_only("WITH t AS (SELECT 1) UPDATE x SET a = 1"));
+    EXPECT_FALSE(is_read_only("WITH t AS (SELECT 1) MERGE INTO x USING t ON x.id = t.id"));
+    EXPECT_FALSE(is_read_only("with t as (select 1) delete from x"));
+}
