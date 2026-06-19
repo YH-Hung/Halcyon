@@ -291,6 +291,25 @@ public:
         return collect<T>(st.value(), pre.value().params);
     }
 
+    // Prepares sql once and executes it for each row of positional params,
+    // accumulating affected-row counts. Stops at the first error.
+    Result<std::int64_t> executeBatch(
+        const std::string& sql,
+        const std::vector<std::vector<detail::cli::Value>>& rows) {
+        if (rows.empty()) return std::int64_t{0};
+        auto st = prepare(sql);
+        if (!st.ok()) return st.error();
+        std::int64_t total = 0;
+        for (const auto& row : rows) {
+            auto b = driver_->bindParams(st.value().handle(), row);
+            if (!b.ok()) return b.error();
+            auto e = driver_->execute(st.value().handle());
+            if (!e.ok()) return e.error();
+            total += e.value();
+        }
+        return total;
+    }
+
     // Begins a transaction (autocommit OFF). Defined in transaction.hpp.
     Result<Transaction> begin();
 

@@ -1,6 +1,8 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
+#include <initializer_list>
 #include <memory>
 #include <string>
 #include <type_traits>
@@ -18,6 +20,48 @@
 #include "halcyon/types.hpp"
 
 namespace halcyon {
+
+namespace detail {
+
+// Appends each reflected field of item (in declaration order) as a bound Value.
+template <class T, class Tuple, std::size_t... I>
+void batch_append_fields(std::vector<detail::cli::Value>& row, const T& item,
+                         const Tuple& mptrs, std::index_sequence<I...>) {
+    (row.push_back(detail::to_value(item.*std::get<I>(mptrs))), ...);
+}
+
+}  // namespace detail
+
+// A prepared set of positional parameter rows for executeBatch.
+struct Batch {
+    std::vector<std::vector<detail::cli::Value>> rows;
+};
+
+// batchOf for a vector of HALCYON_REFLECT'd structs: each field becomes a
+// positional bind in declaration order.
+template <class T>
+Batch batchOf(const std::vector<T>& items) {
+    static_assert(reflect::Reflected<T>::value,
+                  "batchOf<T> requires HALCYON_REFLECT(T, fields...)");
+    Batch out;
+    out.rows.reserve(items.size());
+    auto mptrs = reflect::Reflected<T>::members();
+    constexpr std::size_t N = reflect::Reflected<T>::field_count;
+    for (const auto& item : items) {
+        std::vector<detail::cli::Value> row;
+        row.reserve(N);
+        detail::batch_append_fields(row, item, mptrs,
+                                    std::make_index_sequence<N>{});
+        out.rows.push_back(std::move(row));
+    }
+    return out;
+}
+
+// batchOf for an initializer list of reflected structs: batchOf<T>({{...},{...}}).
+template <class T>
+Batch batchOf(std::initializer_list<T> items) {
+    return batchOf(std::vector<T>(items));
+}
 
 // Owns a leased connection together with the cursor opened on it, so the row
 // range stays valid for the QueryResult's lifetime. Move-only. The facade is the
@@ -177,6 +221,14 @@ public:
     template <class T, class... Args>
     std::vector<T> queryAsOrThrow(const std::string& sql, const Args&... args) {
         return queryAs<T>(sql, args...).value();
+    }
+
+    // --- batch (writes; no auto-retry — caller re-drives on failure) ---
+    Result<std::int64_t> executeBatch(const std::string& sql,
+                                      const Batch& batch) {
+        auto lease = pool_->acquire();
+        if (!lease.ok()) return lease.error();
+        return lease.value()->executeBatch(sql, batch.rows);
     }
 
     // --- transactions ---
