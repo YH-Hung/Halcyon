@@ -6,6 +6,8 @@
 #include "mock_cli_driver.hpp"
 
 using halcyon::ConnectionPool;
+using halcyon::Error;
+using halcyon::ErrorCode;
 using halcyon::PoolConfig;
 using halcyon::testing::MockCliDriver;
 using namespace std::chrono_literals;
@@ -101,4 +103,83 @@ TEST(PoolBasics, PooledConnectionRunsQueries) {
     long sum = 0;
     for (auto& row : rs.value()) sum += std::get<0>(row.as<int>());
     EXPECT_EQ(sum, 7);
+}
+
+TEST(PoolValidation, ReconnectsDeadConnectionOnAcquire) {
+    MockCliDriver driver;
+    PoolConfig cfg = noThread();
+    cfg.min = 1;
+    cfg.max = 2;
+    cfg.validateOnAcquire = true;
+    auto pool = ConnectionPool::create(driver, {"x"}, cfg).value();
+    EXPECT_EQ(driver.connectCalls, 1);
+
+    driver.aliveResults.push_back(false);  // next validation fails → reconnect
+    auto pc = pool->acquire();
+    ASSERT_TRUE(pc.ok());
+    EXPECT_EQ(driver.connectCalls, 2);     // reconnected in place
+    EXPECT_EQ(driver.disconnectCalls, 1);  // old physical handle dropped
+    EXPECT_EQ(pool->total_count(), 1u);    // still one logical slot
+}
+
+TEST(PoolValidation, HealthyConnectionIsNotReconnected) {
+    MockCliDriver driver;
+    PoolConfig cfg = noThread();
+    cfg.validateOnAcquire = true;
+    auto pool = ConnectionPool::create(driver, {"x"}, cfg).value();
+    driver.aliveResults.push_back(true);
+    auto pc = pool->acquire();
+    ASSERT_TRUE(pc.ok());
+    EXPECT_EQ(driver.connectCalls, 1);
+}
+
+TEST(PoolBroken, BrokenConnectionIsDiscardedNotReturned) {
+    MockCliDriver driver;
+    PoolConfig cfg = noThread();
+    cfg.min = 0;
+    cfg.max = 2;
+    auto pool = ConnectionPool::create(driver, {"x"}, cfg).value();
+    {
+        auto pc = pool->acquire();
+        ASSERT_TRUE(pc.ok());
+        pc.value().markBroken();
+        EXPECT_EQ(pool->total_count(), 1u);
+    }
+    EXPECT_EQ(pool->total_count(), 0u);  // discarded on return
+    EXPECT_EQ(pool->idle_count(), 0u);
+}
+
+TEST(PoolReconnect, RetriesConnectWithBackoff) {
+    MockCliDriver driver;
+    Error e;
+    e.code = ErrorCode::Connection;
+    e.sqlstate = "08001";
+    e.retriable = true;
+    driver.connectErrors.push_back(e);  // fail once
+    driver.connectErrors.push_back(e);  // fail twice, then succeed
+
+    PoolConfig cfg = noThread();
+    cfg.min = 1;
+    cfg.backoff.maxAttempts = 3;
+    cfg.backoff.sleep = [](std::chrono::milliseconds) {};  // no real waiting
+    auto pool = ConnectionPool::create(driver, {"x"}, cfg);
+    ASSERT_TRUE(pool.ok()) << pool.error().message;
+    EXPECT_EQ(driver.connectCalls, 3);  // 2 failures + 1 success
+    EXPECT_EQ(pool.value()->total_count(), 1u);
+}
+
+TEST(PoolReconnect, ReturnsErrorWhenAllAttemptsFail) {
+    MockCliDriver driver;
+    Error e;
+    e.code = ErrorCode::Connection;
+    e.retriable = true;
+    for (int i = 0; i < 5; ++i) driver.connectErrors.push_back(e);
+
+    PoolConfig cfg = noThread();
+    cfg.min = 1;
+    cfg.backoff.maxAttempts = 2;
+    cfg.backoff.sleep = [](std::chrono::milliseconds) {};
+    auto pool = ConnectionPool::create(driver, {"x"}, cfg);
+    ASSERT_FALSE(pool.ok());
+    EXPECT_EQ(pool.error().code, ErrorCode::Connection);
 }
