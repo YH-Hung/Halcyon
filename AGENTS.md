@@ -147,6 +147,14 @@ driver whose provenance you trust.
 
 - **TDD:** follow the plans — write the failing test, see it fail, implement the
   minimum, see it pass, commit. Keep commits small and focused.
+- **Verification — ALWAYS run ALL tests, INCLUDING integration tests.** At any
+  verification stage (before claiming work complete, before merging, before a
+  PR), run the full suite, not just the unit tests. The integration suite is not
+  optional here: bring up live Db2 and run it (see "Integration tests against
+  live Db2" above — `HALCYON_BUILD_INTEGRATION_TESTS=ON`, start the container,
+  set `HALCYON_TEST_DSN`, `ctest -L integration`). Never treat a `Skipped`
+  integration result as verification — that means the tests did not run. Tear the
+  container down when done.
 - **Conventional commits:** `feat:`, `fix:`, `build:`, `docs:`, `chore:`, `test:`.
 - **Do not** commit anything under `third_party/` or build artifacts (gitignored).
 - **Do not** add hard dependencies on `prometheus-cpp`/`opentelemetry-cpp` in core;
