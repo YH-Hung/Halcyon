@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <future>
 #include <initializer_list>
 #include <memory>
 #include <string>
@@ -9,6 +10,7 @@
 #include <utility>
 #include <vector>
 
+#include "halcyon/async.hpp"
 #include "halcyon/connection.hpp"
 #include "halcyon/detail/cli/driver.hpp"
 #include "halcyon/error.hpp"
@@ -140,9 +142,11 @@ class Database {
 public:
     static Result<Database> open(detail::cli::ICliDriver& driver,
                                  const std::string& dsn, PoolConfig config = {}) {
+        const std::size_t threads = config.max ? config.max : 1;
         auto pool = ConnectionPool::create(driver, {dsn}, std::move(config));
         if (!pool.ok()) return pool.error();
-        return Database(std::shared_ptr<ConnectionPool>(std::move(pool.value())));
+        return Database(std::shared_ptr<ConnectionPool>(std::move(pool.value())),
+                        std::make_shared<Executor>(threads));
     }
 
     static Database openOrThrow(detail::cli::ICliDriver& driver,
@@ -269,9 +273,28 @@ public:
         return r;
     }
 
+    // --- async (std::future, backed by a shared Executor) ---
+    // Futures must complete before the last Database copy is destroyed (the
+    // shared pool/executor keep the backing alive while any copy lives).
+    template <class... Args>
+    std::future<Result<std::int64_t>> executeAsync(const std::string& sql,
+                                                    Args... args) {
+        return exec_->submit([this, sql, args...]() {
+            return execute(sql, args...);
+        });
+    }
+    template <class T, class... Args>
+    std::future<Result<std::vector<T>>> queryAsAsync(const std::string& sql,
+                                                      Args... args) {
+        return exec_->submit([this, sql, args...]() {
+            return this->template queryAs<T>(sql, args...);
+        });
+    }
+
 private:
-    explicit Database(std::shared_ptr<ConnectionPool> pool)
-        : pool_(std::move(pool)) {
+    explicit Database(std::shared_ptr<ConnectionPool> pool,
+                      std::shared_ptr<Executor> exec)
+        : pool_(std::move(pool)), exec_(std::move(exec)) {
         default_attempts_ = pool_->backoff_policy().maxAttempts;
         if (default_attempts_ < 1) default_attempts_ = 1;
     }
@@ -332,6 +355,7 @@ private:
     }
 
     std::shared_ptr<ConnectionPool> pool_;
+    std::shared_ptr<Executor> exec_;
     int default_attempts_ = 3;
 };
 
