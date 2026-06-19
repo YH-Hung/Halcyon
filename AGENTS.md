@@ -90,6 +90,25 @@ The compose file (`docker/docker-compose.yml`) uses `icr.io/db2_community/db2`
 with `DBNAME=SAMPLE` and `DB2INST1_PASSWORD=halcyon` on port `50000`, matching
 the DSN above.
 
+#### Apple `container` as a Docker alternative (macOS)
+
+On macOS the Db2 service can also be brought up with Apple's native
+[`container`](https://github.com/apple/container) runtime instead of Docker —
+see `docker/README.md` for the full command. The key differences:
+
+- Start the service once with `container system start`, and install a guest
+  kernel once with `container system kernel set --recommended` (no default kernel
+  ships for arm64 hosts).
+- There is no Compose file and no `--privileged` flag (each container is its own
+  VM). Start Db2 with a single `container run -d --platform linux/amd64 -p 50000:50000 ...`.
+- `-p 50000:50000` publishes to `localhost`, so the same `HALCYON_TEST_DSN`
+  works; each container also has its own routable IP shown by `container ls`.
+- **Caveat (verified):** the Db2 image is amd64-only. Under Apple `container`'s
+  amd64 emulation on Apple silicon the engine fails to start (`db2start` →
+  `SQL1042C`, `db2diag.log` shows `db2sysc exited prematurely`), so `SAMPLE`
+  never becomes connectable. Use **Docker** for integration tests on Apple
+  silicon; Apple `container` works end-to-end only on amd64 hosts.
+
 **macOS one-time step (Gatekeeper / GSKit).** The vendored driver `dlopen`s its
 IBM GSKit security libraries (`third_party/clidriver/lib/icc/libgsk8*.dylib`)
 during `connect`. Those binaries are unsigned and arrive with the

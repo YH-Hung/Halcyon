@@ -89,9 +89,28 @@ cmake --build build -j
 # Run unit tests (no live database needed)
 ctest --test-dir build --output-on-failure
 
-# Run integration tests (requires Docker Db2 — see docker/)
+# Run integration tests (requires a live Db2 — see below)
 ctest --test-dir build -L integration --output-on-failure
 ```
+
+### Integration tests against live Db2
+
+The integration suite (`tests/integration/`, CTest label `integration`) only
+*runs* when `HALCYON_TEST_DSN` is set; otherwise the tests report as skipped.
+Configure with `-DHALCYON_BUILD_INTEGRATION_TESTS=ON` to build them.
+
+**Docker (default):**
+
+```bash
+docker compose -f docker/docker-compose.yml up -d
+docker compose -f docker/docker-compose.yml ps   # wait for STATUS = healthy (~2 min)
+export HALCYON_TEST_DSN="DATABASE=SAMPLE;HOSTNAME=localhost;PORT=50000;UID=db2inst1;PWD=halcyon;"
+ctest --test-dir build -L integration --output-on-failure
+docker compose -f docker/docker-compose.yml down
+```
+
+**Apple `container` (Docker alternative on macOS):** see
+[`docker/README.md`](docker/README.md#apple-container-docker-alternative-on-macos).
 
 ### CMake options
 
