@@ -77,8 +77,13 @@ class QueryResult {            // bundles the lease + cursor so the row range is
 };
 
 class Database {               // thread-safe; copyable handle (shared pool)
+    // Ergonomic (spec §5): the facade creates and owns the real Db2 CLI driver.
     static Result<Database> open(const std::string& dsn, PoolConfig = {});
     static Database openOrThrow(const std::string& dsn, PoolConfig = {});
+    // Injectable overloads (first arg detail::cli::ICliDriver&) let unit tests
+    // drive the facade against MockCliDriver; the caller owns that driver.
+    static Result<Database> open(detail::cli::ICliDriver&, const std::string& dsn, PoolConfig = {});
+    static Database openOrThrow(detail::cli::ICliDriver&, const std::string& dsn, PoolConfig = {});
 
     template <class... A> Result<QueryResult> query(const std::string&, const A&...);
     Result<QueryResult> query(const std::string&, const params&);
@@ -130,9 +135,11 @@ Result<std::int64_t> Database::executeBatch(const std::string& sql, const Batch&
 **Async (Task 7, `database.hpp`):**
 
 ```cpp
-template <class... A> std::future<Result<...>> Database::queryAsync(...);   // materializes rows
+// Typed materializing async query (spec §5 name): future carries owned rows.
+template <class T, class... A> std::future<Result<std::vector<T>>> Database::queryAsync(...);
 template <class... A> std::future<Result<std::int64_t>> Database::executeAsync(...);
-template <class T, class... A> std::future<Result<std::vector<T>>> Database::queryAsAsync(...);
+// Untyped/streaming queryAsync over a live cursor across threads is a documented
+// non-goal (the future would tie a pool lease to another thread).
 ```
 
 ---

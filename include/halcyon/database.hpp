@@ -6,12 +6,14 @@
 #include <initializer_list>
 #include <memory>
 #include <string>
+#include <tuple>
 #include <type_traits>
 #include <utility>
 #include <vector>
 
 #include "halcyon/async.hpp"
 #include "halcyon/connection.hpp"
+#include "halcyon/detail/cli/db2_cli_driver.hpp"
 #include "halcyon/detail/cli/driver.hpp"
 #include "halcyon/error.hpp"
 #include "halcyon/parameters.hpp"
@@ -30,6 +32,13 @@ template <class T, class Tuple, std::size_t... I>
 void batch_append_fields(std::vector<detail::cli::Value>& row, const T& item,
                          const Tuple& mptrs, std::index_sequence<I...>) {
     (row.push_back(detail::to_value(item.*std::get<I>(mptrs))), ...);
+}
+
+// Appends each element of a tuple row (in order) as a bound Value.
+template <class Tuple, std::size_t... I>
+void batch_append_tuple(std::vector<detail::cli::Value>& row, const Tuple& t,
+                        std::index_sequence<I...>) {
+    (row.push_back(detail::to_value(std::get<I>(t))), ...);
 }
 
 }  // namespace detail
@@ -63,6 +72,23 @@ Batch batchOf(const std::vector<T>& items) {
 template <class T>
 Batch batchOf(std::initializer_list<T> items) {
     return batchOf(std::vector<T>(items));
+}
+
+// batchOf for explicit tuple rows: batchOf({std::make_tuple(1, "a"), ...}).
+// Each tuple element becomes a positional bind in order — no HALCYON_REFLECT
+// required. More specialized than the initializer_list<T> overload above, so it
+// is preferred for tuple rows.
+template <class... Cols>
+Batch batchOf(std::initializer_list<std::tuple<Cols...>> rows) {
+    Batch out;
+    out.rows.reserve(rows.size());
+    for (const auto& t : rows) {
+        std::vector<detail::cli::Value> row;
+        row.reserve(sizeof...(Cols));
+        detail::batch_append_tuple(row, t, std::index_sequence_for<Cols...>{});
+        out.rows.push_back(std::move(row));
+    }
+    return out;
 }
 
 // Owns a leased connection together with the cursor opened on it, so the row
@@ -140,15 +166,24 @@ private:
 // acquires a pooled connection, runs, and releases it on return.
 class Database {
 public:
-    static Result<Database> open(detail::cli::ICliDriver& driver,
-                                 const std::string& dsn, PoolConfig config = {}) {
-        const std::size_t threads = config.max ? config.max : 1;
-        auto pool = ConnectionPool::create(driver, {dsn}, std::move(config));
-        if (!pool.ok()) return pool.error();
-        return Database(std::shared_ptr<ConnectionPool>(std::move(pool.value())),
-                        std::make_shared<Executor>(threads));
+    // Ergonomic entry point (spec §5): opens over a real IBM Db2 CLI driver that
+    // the Database creates and owns for its lifetime. No CLI types in the call.
+    static Result<Database> open(const std::string& dsn, PoolConfig config = {}) {
+        auto drv = detail::cli::make_db2_cli_driver();
+        auto& ref = *drv;
+        return open_impl(std::move(drv), ref, dsn, std::move(config));
+    }
+    static Database openOrThrow(const std::string& dsn, PoolConfig config = {}) {
+        return open(dsn, std::move(config)).value();
     }
 
+    // Injectable entry point: opens over a caller-owned driver (the caller must
+    // keep it alive for the Database's lifetime). Used by unit tests to drive the
+    // facade against a MockCliDriver with no live Db2.
+    static Result<Database> open(detail::cli::ICliDriver& driver,
+                                 const std::string& dsn, PoolConfig config = {}) {
+        return open_impl(nullptr, driver, dsn, std::move(config));
+    }
     static Database openOrThrow(detail::cli::ICliDriver& driver,
                                 const std::string& dsn, PoolConfig config = {}) {
         return open(driver, dsn, std::move(config)).value();
@@ -283,20 +318,39 @@ public:
             return execute(sql, args...);
         });
     }
+    // Typed async query (spec §5): materializes rows into std::vector<T> so the
+    // future carries no pool-lease lifetime. (Streaming async over a live cursor
+    // is a documented non-goal/future extension.)
     template <class T, class... Args>
-    std::future<Result<std::vector<T>>> queryAsAsync(const std::string& sql,
-                                                      Args... args) {
+    std::future<Result<std::vector<T>>> queryAsync(const std::string& sql,
+                                                   Args... args) {
         return exec_->submit([this, sql, args...]() {
             return this->template queryAs<T>(sql, args...);
         });
     }
 
 private:
-    explicit Database(std::shared_ptr<ConnectionPool> pool,
-                      std::shared_ptr<Executor> exec)
-        : pool_(std::move(pool)), exec_(std::move(exec)) {
+    Database(std::shared_ptr<detail::cli::ICliDriver> owned_driver,
+             std::shared_ptr<ConnectionPool> pool, std::shared_ptr<Executor> exec)
+        : owned_driver_(std::move(owned_driver)),
+          pool_(std::move(pool)),
+          exec_(std::move(exec)) {
         default_attempts_ = pool_->backoff_policy().maxAttempts;
         if (default_attempts_ < 1) default_attempts_ = 1;
+    }
+
+    // Builds a Database over driver, optionally taking ownership of it (owned is
+    // non-null only for the dsn-only open that created the driver itself).
+    static Result<Database> open_impl(
+        std::shared_ptr<detail::cli::ICliDriver> owned,
+        detail::cli::ICliDriver& driver, const std::string& dsn,
+        PoolConfig config) {
+        const std::size_t threads = config.max ? config.max : 1;
+        auto pool = ConnectionPool::create(driver, {dsn}, std::move(config));
+        if (!pool.ok()) return pool.error();
+        return Database(std::move(owned),
+                        std::shared_ptr<ConnectionPool>(std::move(pool.value())),
+                        std::make_shared<Executor>(threads));
     }
 
     // Default per-call policy: read-only statements are safely auto-retried;
@@ -354,6 +408,10 @@ private:
         return last;
     }
 
+    // Non-null only when this Database created the driver (dsn-only open).
+    // Declared before pool_ so it is destroyed AFTER the pool, which holds a
+    // bare reference to the driver.
+    std::shared_ptr<detail::cli::ICliDriver> owned_driver_;
     std::shared_ptr<ConnectionPool> pool_;
     std::shared_ptr<Executor> exec_;
     int default_attempts_ = 3;

@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <string>
+#include <tuple>
 #include <vector>
 
 #include "halcyon/database.hpp"
@@ -61,4 +62,21 @@ TEST(Batch, StopsAndReturnsErrorOnRowFailure) {
     auto n = db.executeBatch("INSERT INTO t(a,b) VALUES (?,?)", batch);
     ASSERT_FALSE(n.ok());
     EXPECT_EQ(n.error().code, halcyon::ErrorCode::Constraint);
+}
+
+TEST(Batch, TupleRowsBuildPositionalBinds) {
+    MockCliDriver driver;
+    driver.execRowCounts.push_back(1);
+    driver.execRowCounts.push_back(1);
+    auto db = Database::open(driver, "X", noThread()).value();
+
+    // No HALCYON_REFLECT needed — explicit tuple rows.
+    auto batch = halcyon::batchOf({
+        std::make_tuple(std::int64_t{1}, std::string{"a"}),
+        std::make_tuple(std::int64_t{2}, std::string{"b"}),
+    });
+    auto n = db.executeBatch("INSERT INTO t(a,b) VALUES (?,?)", batch);
+    ASSERT_TRUE(n.ok());
+    EXPECT_EQ(n.value(), 2);
+    EXPECT_EQ(driver.preparedSql.size(), 1u);  // single prepare reused
 }

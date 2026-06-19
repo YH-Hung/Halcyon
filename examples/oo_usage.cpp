@@ -19,10 +19,8 @@ int main() {
         std::cout << "Set HALCYON_TEST_DSN to run this example.\n";
         return 0;
     }
-    auto driver = halcyon::detail::cli::make_db2_cli_driver();
     try {
-        auto db = halcyon::Database::openOrThrow(*driver, dsn,
-                                                 halcyon::PoolConfig{});
+        auto db = halcyon::Database::openOrThrow(dsn, halcyon::PoolConfig{});
         auto n = db.executeOrThrow("SELECT 1 FROM SYSIBM.SYSDUMMY1");
         (void)n;
         auto rows = db.queryOrThrow("SELECT 1 FROM SYSIBM.SYSDUMMY1");

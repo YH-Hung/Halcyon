@@ -11,8 +11,7 @@ int main() {
         std::cout << "Set HALCYON_TEST_DSN to run this example.\n";
         return 0;
     }
-    auto driver = halcyon::detail::cli::make_db2_cli_driver();
-    auto db = halcyon::Database::open(*driver, dsn);
+    auto db = halcyon::Database::open(dsn);
     if (!db.ok()) {
         std::cerr << "open failed: " << db.error().message << "\n";
         return 1;

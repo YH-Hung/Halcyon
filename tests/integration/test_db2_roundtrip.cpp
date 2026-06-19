@@ -3,6 +3,7 @@
 #include <cstdlib>
 #include <optional>
 #include <string>
+#include <tuple>
 
 #include "halcyon/halcyon.hpp"
 
@@ -22,6 +23,11 @@ struct Person {
     std::optional<int> age;
 };
 HALCYON_REFLECT(Person, id, name, age);
+
+struct BatchCount {
+    std::int64_t c;
+};
+HALCYON_REFLECT(BatchCount, c);
 
 class Db2Integration : public ::testing::Test {
 protected:
@@ -135,4 +141,36 @@ TEST(Db2FacadeIntegration, QueryExecuteAndTransaction) {
             return tx.execute("SELECT 1 FROM SYSIBM.SYSDUMMY1");
         });
     ASSERT_TRUE(txr.ok()) << txr.error().message;
+}
+
+// Exercises the ergonomic surface end to end: driver-less Database::open(dsn)
+// (the facade owns the CLI driver), tuple-row batchOf, and queryAsync<T>.
+TEST(Db2FacadeIntegration, ErgonomicOpenBatchAndAsync) {
+    auto d = dsn();
+    if (!d) GTEST_SKIP() << "HALCYON_TEST_DSN not set; skipping live Db2 test";
+
+    auto db = halcyon::Database::open(*d);  // no CLI types at the call site
+    ASSERT_TRUE(db.ok()) << db.error().message;
+    auto& h = db.value();
+
+    h.execute("DROP TABLE halcyon_batch");  // ignore error if absent
+    ASSERT_TRUE(
+        h.execute("CREATE TABLE halcyon_batch(a INT NOT NULL, b VARCHAR(8))").ok());
+
+    auto batch = halcyon::batchOf({
+        std::make_tuple(std::int64_t{1}, std::string{"x"}),
+        std::make_tuple(std::int64_t{2}, std::string{"y"}),
+    });
+    auto inserted =
+        h.executeBatch("INSERT INTO halcyon_batch(a,b) VALUES (?,?)", batch);
+    ASSERT_TRUE(inserted.ok()) << inserted.error().message;
+    EXPECT_EQ(inserted.value(), 2);
+
+    auto f = h.queryAsync<BatchCount>("SELECT COUNT(*) FROM halcyon_batch");
+    auto r = f.get();
+    ASSERT_TRUE(r.ok()) << r.error().message;
+    ASSERT_EQ(r.value().size(), 1u);
+    EXPECT_EQ(r.value()[0].c, 2);
+
+    h.execute("DROP TABLE halcyon_batch");
 }

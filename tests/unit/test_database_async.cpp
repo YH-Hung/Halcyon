@@ -35,14 +35,14 @@ TEST(DatabaseAsync, ExecuteAsyncReturnsCount) {
     EXPECT_EQ(r.value(), 4);
 }
 
-TEST(DatabaseAsync, QueryAsAsyncMaterializesRows) {
+TEST(DatabaseAsync, QueryAsyncMaterializesRows) {
     MockCliDriver driver;
     driver.resultSets.push_back(MockCliDriver::ScriptedRows{
         {"n"},
         {{halcyon::detail::cli::Value{std::int64_t{2}}},
          {halcyon::detail::cli::Value{std::int64_t{5}}}}});
     auto db = Database::open(driver, "X", noThread()).value();
-    auto f = db.queryAsAsync<Num>("SELECT n FROM t");
+    auto f = db.queryAsync<Num>("SELECT n FROM t");
     auto r = f.get();
     ASSERT_TRUE(r.ok());
     ASSERT_EQ(r.value().size(), 2u);
