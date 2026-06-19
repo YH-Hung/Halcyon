@@ -173,6 +173,13 @@ public:
         return slots_.size() - idle_.size();
     }
 
+    // The reconnect backoff policy this pool was configured with (used by the
+    // facade to derive a default per-call ExecPolicy).
+    BackoffPolicy backoff_policy() const {
+        std::lock_guard<std::mutex> lk(mu_);
+        return config_.backoff;
+    }
+
     // One maintenance pass: reap expired idle connections (respecting min) and
     // refill back up to min. Public so tests can drive it deterministically.
     void maintain();
