@@ -1,0 +1,5 @@
+add_executable(halcyon_example_oo oo_usage.cpp)
+target_link_libraries(halcyon_example_oo PRIVATE halcyon::halcyon)
+
+add_executable(halcyon_example_functional functional_usage.cpp)
+target_link_libraries(halcyon_example_functional PRIVATE halcyon::halcyon)

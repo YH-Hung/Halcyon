@@ -114,3 +114,25 @@ TEST(Db2PoolIntegration, ConcurrentAcquireAndQuery) {
         EXPECT_EQ(r.value(), 1);
     }
 }
+
+TEST(Db2FacadeIntegration, QueryExecuteAndTransaction) {
+    auto d = dsn();
+    if (!d) GTEST_SKIP() << "HALCYON_TEST_DSN not set; skipping live Db2 test";
+
+    auto driver = halcyon::detail::cli::make_db2_cli_driver();
+    auto db = halcyon::Database::open(*driver, *d);
+    ASSERT_TRUE(db.ok()) << db.error().message;
+
+    auto qr = db.value().query("SELECT 1 FROM SYSIBM.SYSDUMMY1");
+    ASSERT_TRUE(qr.ok()) << qr.error().message;
+    std::int64_t sum = 0;
+    for (auto& row : qr.value()) sum += std::get<0>(row.as<std::int64_t>());
+    EXPECT_EQ(sum, 1);
+
+    auto txr = halcyon::transaction(
+        db.value(),
+        [](halcyon::Transaction& tx) -> halcyon::Result<std::int64_t> {
+            return tx.execute("SELECT 1 FROM SYSIBM.SYSDUMMY1");
+        });
+    ASSERT_TRUE(txr.ok()) << txr.error().message;
+}
