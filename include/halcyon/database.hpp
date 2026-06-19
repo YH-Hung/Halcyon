@@ -44,6 +44,51 @@ private:
     ResultSet rs_;
 };
 
+// A Transaction plus the pooled lease it runs on, so both are released together.
+// Returned by Database::begin(); move-only. operator-> forwards to the
+// Transaction. Declaration order matters: txn_ is destroyed (rolls back if not
+// committed) BEFORE lease_ returns the connection to the pool.
+class ScopedTransaction {
+public:
+    ScopedTransaction(ScopedTransaction&&) noexcept = default;
+    ScopedTransaction& operator=(ScopedTransaction&&) noexcept = default;
+    ScopedTransaction(const ScopedTransaction&) = delete;
+    ScopedTransaction& operator=(const ScopedTransaction&) = delete;
+
+    Transaction* operator->() noexcept { return &txn_; }
+    Transaction& operator*() noexcept { return txn_; }
+
+    bool active() const noexcept { return txn_.active(); }
+    template <class... Args>
+    Result<std::int64_t> execute(const std::string& sql, const Args&... a) {
+        return txn_.execute(sql, a...);
+    }
+    Result<std::int64_t> execute(const std::string& sql, const params& n) {
+        return txn_.execute(sql, n);
+    }
+    template <class... Args>
+    Result<ResultSet> query(const std::string& sql, const Args&... a) {
+        return txn_.query(sql, a...);
+    }
+    Result<ResultSet> query(const std::string& sql, const params& n) {
+        return txn_.query(sql, n);
+    }
+    template <class T, class... Args>
+    Result<std::vector<T>> queryAs(const std::string& sql, const Args&... a) {
+        return txn_.template queryAs<T>(sql, a...);
+    }
+    Result<void> commit() { return txn_.commit(); }
+    Result<void> rollback() { return txn_.rollback(); }
+
+private:
+    friend class Database;
+    ScopedTransaction(PooledConnection lease, Transaction txn)
+        : lease_(std::move(lease)), txn_(std::move(txn)) {}
+
+    PooledConnection lease_;  // destroyed AFTER txn_
+    Transaction txn_;
+};
+
 // High-level thread-safe entry point. Copyable handle: copies share one pool
 // (shared_ptr), so a Database can be passed by value across threads. Each call
 // acquires a pooled connection, runs, and releases it on return.
@@ -134,6 +179,44 @@ public:
         return queryAs<T>(sql, args...).value();
     }
 
+    // --- transactions ---
+
+    // Begins a transaction on a freshly leased connection; the returned
+    // ScopedTransaction owns the lease for the unit of work's lifetime.
+    Result<ScopedTransaction> begin() {
+        auto lease = pool_->acquire();
+        if (!lease.ok()) return lease.error();
+        auto tx = lease.value()->begin();
+        if (!tx.ok()) return tx.error();
+        return ScopedTransaction(std::move(lease.value()),
+                                 std::move(tx.value()));
+    }
+
+    // Functional transaction: commit on a successful Result, rollback on an
+    // error Result or a thrown exception (then rethrow). fn must return
+    // Result<U>.
+    template <class Fn>
+    auto transaction(Fn&& fn) -> std::invoke_result_t<Fn, Transaction&> {
+        using R = std::invoke_result_t<Fn, Transaction&>;
+        auto st = begin();
+        if (!st.ok()) return R(st.error());
+        R r = [&]() -> R {
+            try {
+                return std::forward<Fn>(fn)(*st.value());
+            } catch (...) {
+                st.value().rollback();
+                throw;
+            }
+        }();
+        if (r.ok()) {
+            auto c = st.value().commit();
+            if (!c.ok()) return R(c.error());
+        } else {
+            st.value().rollback();
+        }
+        return r;
+    }
+
 private:
     explicit Database(std::shared_ptr<ConnectionPool> pool)
         : pool_(std::move(pool)) {
@@ -199,5 +282,34 @@ private:
     std::shared_ptr<ConnectionPool> pool_;
     int default_attempts_ = 3;
 };
+
+// --- Functional free-function API (delegates to Database) ---
+
+template <class... Args>
+auto query(Database& db, const std::string& sql, const Args&... args) {
+    return db.query(sql, args...);
+}
+inline auto query(Database& db, const std::string& sql, const params& named) {
+    return db.query(sql, named);
+}
+template <class... Args>
+auto execute(Database& db, const std::string& sql, const Args&... args) {
+    return db.execute(sql, args...);
+}
+inline auto execute(Database& db, const std::string& sql, const params& named) {
+    return db.execute(sql, named);
+}
+template <class T, class... Args>
+auto query_as(Database& db, const std::string& sql, const Args&... args) {
+    return db.template queryAs<T>(sql, args...);
+}
+template <class T>
+auto query_as(Database& db, const std::string& sql, const params& named) {
+    return db.template queryAs<T>(sql, named);
+}
+template <class Fn>
+auto transaction(Database& db, Fn&& fn) {
+    return db.transaction(std::forward<Fn>(fn));
+}
 
 }  // namespace halcyon

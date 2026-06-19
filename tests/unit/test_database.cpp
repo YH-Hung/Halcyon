@@ -116,3 +116,74 @@ TEST(Database, ThrowingOverloadUnwraps) {
     auto db = Database::open(driver, "X", noThread()).value();
     EXPECT_THROW(db.executeOrThrow("BAD SQL"), halcyon::Exception);
 }
+
+#include <stdexcept>
+
+TEST(DatabaseTxn, CommitsOnSuccessfulLambda) {
+    MockCliDriver driver;
+    auto db = Database::open(driver, "X", noThread()).value();
+    auto r = db.transaction([](halcyon::Transaction& tx) -> halcyon::Result<int> {
+        auto n = tx.execute("INSERT INTO t VALUES (?)", 1);
+        if (!n.ok()) return n.error();
+        return 99;
+    });
+    ASSERT_TRUE(r.ok());
+    EXPECT_EQ(r.value(), 99);
+    EXPECT_EQ(driver.commitCalls, 1);
+    EXPECT_EQ(driver.rollbackCalls, 0);
+}
+
+TEST(DatabaseTxn, RollsBackWhenLambdaReturnsError) {
+    MockCliDriver driver;
+    auto db = Database::open(driver, "X", noThread()).value();
+    auto r = db.transaction([](halcyon::Transaction& tx) -> halcyon::Result<int> {
+        (void)tx;
+        halcyon::Error e;
+        e.code = halcyon::ErrorCode::Constraint;
+        e.message = "dup";
+        return e;
+    });
+    ASSERT_FALSE(r.ok());
+    EXPECT_EQ(driver.commitCalls, 0);
+    EXPECT_EQ(driver.rollbackCalls, 1);
+}
+
+TEST(DatabaseTxn, RollsBackWhenLambdaThrows) {
+    MockCliDriver driver;
+    auto db = Database::open(driver, "X", noThread()).value();
+    EXPECT_THROW(
+        db.transaction([](halcyon::Transaction&) -> halcyon::Result<int> {
+            throw std::runtime_error("boom");
+        }),
+        std::runtime_error);
+    EXPECT_EQ(driver.commitCalls, 0);
+    EXPECT_EQ(driver.rollbackCalls, 1);
+}
+
+TEST(DatabaseTxn, BeginReturnsUsableTransaction) {
+    MockCliDriver driver;
+    auto db = Database::open(driver, "X", noThread()).value();
+    auto tx = db.begin();
+    ASSERT_TRUE(tx.ok());
+    ASSERT_TRUE(tx.value().execute("UPDATE t SET a=?", 1).ok());
+    ASSERT_TRUE(tx.value().commit().ok());
+    EXPECT_EQ(driver.commitCalls, 1);
+}
+
+TEST(FunctionalApi, FreeFunctionsDelegateToDatabase) {
+    MockCliDriver driver;
+    auto db = Database::open(driver, "X", noThread()).value();
+
+    // execute() drains execRowCounts (mock attaches resultSets first, so none
+    // must be queued yet for the count to be returned).
+    driver.execRowCounts.push_back(2);
+    auto n = halcyon::execute(db, "UPDATE t SET a=? WHERE id=?", 1, 3);
+    ASSERT_TRUE(n.ok());
+    EXPECT_EQ(n.value(), 2);
+
+    driver.resultSets.push_back(idName(3, "c"));
+    auto people = halcyon::query_as<Person>(db, "SELECT id, name FROM t");
+    ASSERT_TRUE(people.ok());
+    ASSERT_EQ(people.value().size(), 1u);
+    EXPECT_EQ(people.value()[0].id, 3);
+}
