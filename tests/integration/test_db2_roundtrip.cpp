@@ -77,3 +77,40 @@ TEST_F(Db2Integration, TupleIterationAndAnonymousParams) {
     }
     EXPECT_GE(count, 1);
 }
+
+#include <cstdint>
+#include <future>
+#include <thread>
+#include <vector>
+
+TEST(Db2PoolIntegration, ConcurrentAcquireAndQuery) {
+    auto d = dsn();
+    if (!d) GTEST_SKIP() << "HALCYON_TEST_DSN not set; skipping live Db2 test";
+
+    auto driver = halcyon::detail::cli::make_db2_cli_driver();
+    halcyon::PoolConfig cfg;
+    cfg.min = 2;
+    cfg.max = 6;
+    cfg.validateOnAcquire = true;
+    auto pool = halcyon::ConnectionPool::create(*driver, {*d}, cfg);
+    ASSERT_TRUE(pool.ok()) << pool.error().message;
+
+    halcyon::Executor ex(6);
+    std::vector<std::future<halcyon::Result<std::int64_t>>> futs;
+    for (int i = 0; i < 24; ++i) {
+        futs.push_back(halcyon::async_with_connection(
+            ex, *pool.value(),
+            [](halcyon::Connection& c) -> halcyon::Result<std::int64_t> {
+                auto rs = c.query("SELECT 1 FROM SYSIBM.SYSDUMMY1");
+                if (!rs.ok()) return rs.error();
+                std::int64_t n = 0;
+                for (auto& row : rs.value()) n += std::get<0>(row.as<std::int64_t>());
+                return n;
+            }));
+    }
+    for (auto& f : futs) {
+        auto r = f.get();
+        ASSERT_TRUE(r.ok()) << r.error().message;
+        EXPECT_EQ(r.value(), 1);
+    }
+}

@@ -6,6 +6,8 @@ FetchContent_Declare(
 set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(googletest)
 
+find_package(Threads REQUIRED)
+
 add_executable(halcyon_unit_tests
     unit/test_version.cpp
     unit/test_error.cpp
@@ -16,10 +18,14 @@ add_executable(halcyon_unit_tests
     unit/test_result_set.cpp
     unit/test_connection.cpp
     unit/test_reflect.cpp
-    unit/test_sqlstate.cpp)
+    unit/test_sqlstate.cpp
+    unit/test_retry.cpp
+    unit/test_pool.cpp
+    unit/test_pool_maintenance.cpp
+    unit/test_async.cpp)
 
 target_link_libraries(halcyon_unit_tests
-    PRIVATE halcyon::halcyon GTest::gtest_main)
+    PRIVATE halcyon::halcyon GTest::gtest_main Threads::Threads)
 
 target_include_directories(halcyon_unit_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/unit)
 
