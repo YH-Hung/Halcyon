@@ -284,7 +284,29 @@ inline void PooledConnection::release() {
     }
 }
 
-// Implemented in Task 4; declared here so the header compiles in Task 2 builds.
-inline void ConnectionPool::maintain() {}
+inline void ConnectionPool::maintain() {
+    std::lock_guard<std::mutex> lk(mu_);
+    const auto now = config_.now();
+
+    std::deque<detail::PoolSlot*> keep;
+    for (detail::PoolSlot* s : idle_) {
+        const bool expired_life = (now - s->created_at) >= config_.maxLifetime;
+        const bool expired_idle = (now - s->last_used_at) >= config_.idleTimeout;
+        const bool over_min = slots_.size() > config_.min;
+        if (expired_life || (expired_idle && over_min)) {
+            remove_slot_locked(s);  // Connection dtor disconnects
+        } else {
+            keep.push_back(s);
+        }
+    }
+    idle_ = std::move(keep);
+
+    // Refill up to min (best effort; a failed connect is retried next pass).
+    while (slots_.size() < config_.min) {
+        auto c = make_connection();
+        if (!c.ok()) break;
+        add_idle_slot(std::move(c.value()));
+    }
+}
 
 }  // namespace halcyon
