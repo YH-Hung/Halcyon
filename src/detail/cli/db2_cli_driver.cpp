@@ -291,11 +291,50 @@ public:
         return Result<void>();
     }
 
+    Result<void> setAutoCommit(ConnectionHandle conn, bool enabled) override {
+        auto it = conns_.find(conn);
+        if (it == conns_.end()) return unknown_conn();
+        SQLPOINTER v = reinterpret_cast<SQLPOINTER>(static_cast<SQLLEN>(
+            enabled ? SQL_AUTOCOMMIT_ON : SQL_AUTOCOMMIT_OFF));
+        SQLRETURN rc = SQLSetConnectAttr(it->second, SQL_ATTR_AUTOCOMMIT, v,
+                                         SQL_IS_INTEGER);
+        if (!cli_ok(rc))
+            return make_error(SQL_HANDLE_DBC, it->second, ErrorCode::Unknown,
+                              "SQLSetConnectAttr(AUTOCOMMIT) failed");
+        return Result<void>();
+    }
+    Result<void> commit(ConnectionHandle conn) override {
+        return end_tran(conn, SQL_COMMIT, "SQLEndTran(COMMIT) failed");
+    }
+    Result<void> rollback(ConnectionHandle conn) override {
+        return end_tran(conn, SQL_ROLLBACK, "SQLEndTran(ROLLBACK) failed");
+    }
+
 private:
     struct StmtState {
         SQLHSTMT handle;
         std::vector<BoundParam> bound;
     };
+
+    static Error make_conn_error(const char* msg) {
+        Error e;
+        e.code = ErrorCode::Connection;
+        e.message = msg;
+        return e;
+    }
+    Result<void> unknown_conn() {
+        return make_conn_error("unknown connection handle");
+    }
+    Result<void> end_tran(ConnectionHandle conn, SQLSMALLINT how,
+                          const char* context) {
+        auto it = conns_.find(conn);
+        if (it == conns_.end()) return unknown_conn();
+        SQLRETURN rc = SQLEndTran(SQL_HANDLE_DBC, it->second, how);
+        if (!cli_ok(rc))
+            return make_error(SQL_HANDLE_DBC, it->second, ErrorCode::Unknown,
+                              context);
+        return Result<void>();
+    }
 
     // Reads a (possibly long) character column by looping SQLGetData.
     Result<Value> get_string(SQLHSTMT h, SQLUSMALLINT col) {

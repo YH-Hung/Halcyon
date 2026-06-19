@@ -71,6 +71,16 @@ public:
 
     // Releases a statement handle. Idempotent for already-finalized handles.
     virtual Result<void> finalize(StatementHandle stmt) = 0;
+
+    // --- Transaction control (Plan 4) ---
+
+    // Enables/disables autocommit on the connection. A transaction begins by
+    // disabling it and ends (commit/rollback) by re-enabling it.
+    virtual Result<void> setAutoCommit(ConnectionHandle conn, bool enabled) = 0;
+
+    // Commits / rolls back the current unit of work on the connection.
+    virtual Result<void> commit(ConnectionHandle conn) = 0;
+    virtual Result<void> rollback(ConnectionHandle conn) = 0;
 };
 
 }  // namespace halcyon::detail::cli

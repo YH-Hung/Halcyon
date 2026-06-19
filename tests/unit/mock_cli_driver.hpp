@@ -163,7 +163,38 @@ public:
     int finalizeCalls = 0;
     std::vector<StatementHandle> finalized;
 
+    // --- transaction scripting (Plan 4) ---
+    std::deque<Error> txnErrors;  // next setAutoCommit/commit/rollback fails
+    std::vector<bool> autoCommitCalls;
+    int commitCalls = 0;
+    int rollbackCalls = 0;
+
+    Result<void> setAutoCommit(ConnectionHandle handle, bool enabled) override {
+        (void)handle;
+        autoCommitCalls.push_back(enabled);
+        return next_txn_result();
+    }
+    Result<void> commit(ConnectionHandle handle) override {
+        (void)handle;
+        ++commitCalls;
+        return next_txn_result();
+    }
+    Result<void> rollback(ConnectionHandle handle) override {
+        (void)handle;
+        ++rollbackCalls;
+        return next_txn_result();
+    }
+
 private:
+    Result<void> next_txn_result() {
+        if (!txnErrors.empty()) {
+            Error e = txnErrors.front();
+            txnErrors.pop_front();
+            return Result<void>(e);
+        }
+        return Result<void>();
+    }
+
     static Error rangeError() {
         Error e;
         e.code = ErrorCode::Mapping;

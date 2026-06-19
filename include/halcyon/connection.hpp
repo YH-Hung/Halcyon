@@ -17,7 +17,8 @@
 
 namespace halcyon {
 
-class ResultSet;  // fwd
+class ResultSet;   // fwd
+class Transaction;  // fwd (defined in transaction.hpp)
 
 // A non-owning view of the current cursor row. Valid only at the iterator's
 // current position (forward-only); reads columns lazily via the seam.
@@ -228,6 +229,8 @@ public:
 
     detail::cli::ConnectionHandle handle() const noexcept { return handle_; }
 
+    detail::cli::ICliDriver& driver() const noexcept { return *driver_; }
+
     Result<Statement> prepare(const std::string& sql) {
         auto h = driver_->prepare(handle_, sql);
         if (!h.ok()) return h.error();
@@ -287,6 +290,9 @@ public:
         if (!st.ok()) return st.error();
         return collect<T>(st.value(), pre.value().params);
     }
+
+    // Begins a transaction (autocommit OFF). Defined in transaction.hpp.
+    Result<Transaction> begin();
 
 private:
     template <class T>
