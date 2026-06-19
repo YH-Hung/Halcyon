@@ -147,7 +147,7 @@ driver whose provenance you trust.
 
 - **TDD:** follow the plans — write the failing test, see it fail, implement the
   minimum, see it pass, commit. Keep commits small and focused.
-- **Verification — ALWAYS run ALL tests, INCLUDING integration tests.** At any
+- **Verification before finish implementation — ALWAYS run ALL tests, INCLUDING integration tests.** At any
   verification stage (before claiming work complete, before merging, before a
   PR), run the full suite, not just the unit tests. The integration suite is not
   optional here: bring up live Db2 and run it (see "Integration tests against
