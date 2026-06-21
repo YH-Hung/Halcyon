@@ -170,3 +170,36 @@ TEST(StressScenario, StatementCacheStaysCorrectUnderReuse) {
     EXPECT_LT(fake->prepareCalls.load(), fake->executeCalls.load());
     EXPECT_EQ(db.value().pool().active_count(), 0u);
 }
+
+using halcyon::stress::make_reconnect_faults;
+
+TEST(StressScenario, ReconnectAndRetryRecoverUnderFaults) {
+    auto fake = std::make_shared<ConcurrentFakeDriver>();
+    fake->failExecuteEvery = 7;       // retriable statement errors
+    fake->killConnectionEvery = 11;   // forces validate-on-acquire reconnects
+    auto db = Database::open(fake, "dsn", config_for(ScenarioId::Reconnect, 6));
+    ASSERT_TRUE(db.ok()) << db.error().message;
+    const long connects_after_warmup = fake->connectCalls.load();
+
+    // The safe-retry policy is bounded (3 attempts here). Under ~22% per-attempt
+    // fault injection across 12 threads a small minority of ops legitimately
+    // exhaust their budget and surface a *retriable* error — correct bounded-policy
+    // behaviour (spec §6.4), not a bug. `recovered` proves the bulk genuinely came
+    // back with the right value; the workload still fails loudly on a non-retriable
+    // error or a wrong scalar (a cross-thread handle/row mixup).
+    std::atomic<long> recovered{0};
+    Workload w = make_reconnect_faults(db.value(), &recovered);
+    RunConfig cfg;
+    cfg.threads = 12;
+    cfg.stop.total_iters = 30000;
+    RunReport r = run_workload(w, cfg);
+
+    EXPECT_FALSE(r.failed) << r.first_error;            // no wrong scalar / non-retriable
+    EXPECT_GT(fake->connectCalls.load(),
+              connects_after_warmup);                   // reconnects actually fired
+    EXPECT_GT(fake->executeCalls.load(),
+              static_cast<long>(r.ops));                // retries actually fired
+    EXPECT_GT(recovered.load(),
+              static_cast<long>(r.ops) * 9 / 10);       // vast majority recovered
+    EXPECT_EQ(db.value().pool().active_count(), 0u);    // no leaked leases
+}

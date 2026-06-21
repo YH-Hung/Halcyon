@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -124,6 +125,35 @@ inline Workload make_cache_churn(Database& db) {
         }
         if (r.value().size() != 1 || r.value()[0].v != n)
             ctx.fail("wrong scalar from cached query");
+    }};
+}
+
+// --- Scenario 4: reconnect + transient-fault injection under load ---
+// Driven through the facade so the safe-retry policy is in play. With fault knobs
+// set on the driver and validateOnAcquire on the pool, read-only queries are
+// transparently retried / reconnected. The safe-retry policy is BOUNDED (spec
+// §6.4: recovery happens "per the safe-retry policy"), so under adversarial 1-in-N
+// fault injection a minority of ops can legitimately exhaust their attempts and
+// surface the still-RETRIABLE error — that is correct policy behaviour, not a bug.
+// What must NEVER happen is a non-retriable surfaced error or a wrong scalar (a
+// cross-thread handle/row mixup). `recovered`, if provided, counts ops that came
+// back with the right value, so the caller can prove the bulk genuinely recovered.
+inline Workload make_reconnect_faults(Database& db,
+                                      std::atomic<long>* recovered = nullptr) {
+    return Workload{"reconnect", [&db, recovered](WorkerCtx& ctx) {
+        auto r = db.queryAs<One>(select_n(7));
+        if (!r.ok()) {
+            // Exhausting a bounded retry budget surfaces a retriable error: allowed.
+            // A non-retriable error means recovery corrupted the path: a failure.
+            if (!r.error().retriable)
+                ctx.fail("non-retriable error surfaced: " + r.error().message);
+            return;
+        }
+        if (r.value().size() != 1 || r.value()[0].v != 7) {
+            ctx.fail("wrong scalar after recovery");  // cross-thread handle mixup
+            return;
+        }
+        if (recovered) recovered->fetch_add(1, std::memory_order_relaxed);
     }};
 }
 
