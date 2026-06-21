@@ -44,7 +44,14 @@ export HALCYON_TEST_DSN="DATABASE=SAMPLE;HOSTNAME=localhost;PORT=50000;UID=db2in
 ./build/tests/stress/halcyon_stress --format=csv --strict > sweep.csv
 ```
 
-`--duration` and `--warmup` are integer **milliseconds**; `--latency` is the
-fake's per-call latency in **microseconds**. The soft scaling/starvation/latency
-gates are reported as `PASS`/`WARN` and only affect the exit code under `--strict`
-(fake backend only — live numbers are report-only).
+`--scenario` accepts a comma list (e.g. `--scenario=pool,executor,cache,txn`) or
+`all`, just like `--threads`. `--duration` and `--warmup` are integer
+**milliseconds** (the warmup window runs untimed and is discarded before the timed
+window, spec §5.4); `--latency` is the fake's per-call latency in **microseconds**.
+
+The three soft gates (spec §7.2) are reported as `PASS`/`WARN` and only affect the
+exit code under `--strict` (fake backend only — live numbers are report-only):
+
+- **scaling** — peak throughput ≥ `--scaling-mult` × base (default 1.5)
+- **latency** — worst p99/p50 ≤ `--latency-mult` (default 50)
+- **no-starvation** — worst tolerated error-rate ≤ `--starvation-max` (default 0.25)
