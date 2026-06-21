@@ -178,12 +178,18 @@ public:
         ++closeCursorCalls;
         auto it = statements.find(stmt);
         if (it != statements.end()) it->second.position = -1;  // cursor reset
+        if (!closeCursorErrors.empty()) {
+            Error e = closeCursorErrors.front();
+            closeCursorErrors.pop_front();
+            return Result<void>(e);
+        }
         return Result<void>();
     }
 
     int finalizeCalls = 0;
     std::vector<StatementHandle> finalized;
     int closeCursorCalls = 0;
+    std::deque<Error> closeCursorErrors;  // next closeCursor() fails with each
 
     // --- transaction scripting (Plan 4) ---
     std::deque<Error> txnErrors;  // next setAutoCommit/commit/rollback fails

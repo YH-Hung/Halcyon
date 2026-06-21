@@ -107,6 +107,22 @@ TEST(StatementCache, PoisonDropsEntry) {
     EXPECT_EQ(driver.preparedSql.size(), 2u);
 }
 
+TEST(StatementCache, CloseFailureDropsEntry) {
+    MockCliDriver driver;
+    StatementCache cache(driver, open_conn(driver), /*capacity=*/8);
+    const std::string sql = "SELECT 1";
+    driver.closeCursorErrors.push_back([] {
+        halcyon::Error e; e.code = halcyon::ErrorCode::Connection;
+        e.message = "reset failed";
+        return e;
+    }());
+
+    { auto l = cache.acquire(sql); ASSERT_TRUE(l.ok()); }  // miss; release closeCursor fails
+    EXPECT_EQ(driver.finalizeCalls, 1);  // half-reset handle dropped, not reused
+    { auto l = cache.acquire(sql); ASSERT_TRUE(l.ok()); }  // re-prepared
+    EXPECT_EQ(driver.preparedSql.size(), 2u);
+}
+
 TEST(StatementCache, DestructorFinalizesLiveEntries) {
     MockCliDriver driver;
     {

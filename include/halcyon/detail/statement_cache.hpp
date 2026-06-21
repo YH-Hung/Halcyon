@@ -187,7 +187,15 @@ class StatementCache {
             emit_size();
             return;
         }
-        driver_->closeCursor(e->handle);  // best-effort reset for reuse
+        // Best-effort cursor reset. If closeCursor fails the handle may be only
+        // half-reset; swallow the error but drop the entry so a bad handle is
+        // never served to a later acquire (spec §7).
+        if (!driver_->closeCursor(e->handle).ok()) {
+            driver_->finalize(e->handle);
+            erase_entry(e);
+            emit_size();
+            return;
+        }
         e->busy = false;
         for (auto lit = lru_.begin(); lit != lru_.end(); ++lit)
             if (&*lit == e) {

@@ -177,6 +177,11 @@ public:
             auto f = rs_->driver_->fetch(rs_->stmt_);
             if (!f.ok()) {  // a mid-stream Db2 error ends iteration, recorded
                 rs_->error_ = f.error();
+                // A fetch error on a cached handle may leave it in a bad state;
+                // poison the lease so on release the entry is finalized + dropped
+                // and the next call re-prepares (spec §5). No-op for borrowing
+                // ResultSets, whose lease_ is empty.
+                if (rs_->lease_) rs_->lease_->poison();
                 at_end_ = true;
                 row_.reset();
                 return;
