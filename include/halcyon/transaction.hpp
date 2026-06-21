@@ -17,17 +17,21 @@ namespace halcyon {
 // auto-retried (the spec requires the whole transaction to be re-driven).
 class Transaction {
 public:
-    Transaction(Transaction&& o) noexcept : conn_(o.conn_), active_(o.active_) {
+    Transaction(Transaction&& o) noexcept
+        : conn_(o.conn_), active_(o.active_), poisoned_(o.poisoned_) {
         o.conn_ = nullptr;
         o.active_ = false;
+        o.poisoned_ = false;
     }
     Transaction& operator=(Transaction&& o) noexcept {
         if (this != &o) {
             finish_rollback();
             conn_ = o.conn_;
             active_ = o.active_;
+            poisoned_ = o.poisoned_;
             o.conn_ = nullptr;
             o.active_ = false;
+            o.poisoned_ = false;
         }
         return *this;
     }
@@ -36,6 +40,12 @@ public:
     ~Transaction() { finish_rollback(); }
 
     bool active() const noexcept { return active_; }
+
+    // True if a commit/rollback (or the implicit rollback on destruction) failed,
+    // leaving the connection dead or with autocommit in an unknown state. The
+    // owner (ScopedTransaction) discards such a connection rather than returning
+    // it to the pool for reuse.
+    bool poisoned() const noexcept { return poisoned_; }
 
     template <class... Args>
     Result<std::int64_t> execute(const std::string& sql, const Args&... args) {
@@ -65,6 +75,7 @@ public:
         auto c = conn_->driver().commit(conn_->handle());
         active_ = false;
         auto a = conn_->driver().setAutoCommit(conn_->handle(), true);
+        if (!c.ok() || !a.ok()) poisoned_ = true;  // dead conn or autocommit lost
         if (!c.ok()) return c;
         return a;
     }
@@ -73,6 +84,7 @@ public:
         auto r = conn_->driver().rollback(conn_->handle());
         active_ = false;
         auto a = conn_->driver().setAutoCommit(conn_->handle(), true);
+        if (!r.ok() || !a.ok()) poisoned_ = true;  // dead conn or autocommit lost
         if (!r.ok()) return r;
         return a;
     }
@@ -83,14 +95,16 @@ private:
 
     void finish_rollback() noexcept {
         if (conn_ && active_) {
-            conn_->driver().rollback(conn_->handle());
-            conn_->driver().setAutoCommit(conn_->handle(), true);
+            auto r = conn_->driver().rollback(conn_->handle());
+            auto a = conn_->driver().setAutoCommit(conn_->handle(), true);
+            if (!r.ok() || !a.ok()) poisoned_ = true;  // see poisoned()
             active_ = false;
         }
     }
 
     Connection* conn_;
     bool active_;
+    bool poisoned_ = false;
 };
 
 inline Result<Transaction> Connection::begin() {

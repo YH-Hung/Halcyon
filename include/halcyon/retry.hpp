@@ -64,9 +64,12 @@ namespace detail {
 // a data-change statement (WITH … INSERT/UPDATE/DELETE/MERGE) is NOT read-only
 // and must not be replayed.
 //
-// Known limitation: a SELECT whose body performs a write via a Db2 data-change
-// table reference (e.g. SELECT … FROM FINAL TABLE(INSERT …)) is classified
-// read-only here; the facade should not mark such statements idempotent.
+// A data-change verb (INSERT/UPDATE/DELETE/MERGE) appearing as a whole token at
+// ANY parenthesis depth also disqualifies the statement, so a Db2 data-change
+// table reference — SELECT … FROM FINAL/NEW/OLD TABLE(INSERT/UPDATE/DELETE/MERGE …),
+// whose embedded write lives inside parentheses — is correctly classified as NOT
+// read-only even though it leads with SELECT. Quoted strings and delimited
+// identifiers are skipped so their contents cannot perturb the scan.
 inline bool is_read_only(std::string_view sql) noexcept {
     auto is_ident = [](unsigned char c) {
         return std::isalnum(c) != 0 || c == '_';
@@ -79,6 +82,10 @@ inline bool is_read_only(std::string_view sql) noexcept {
         }
         return true;
     };
+    auto is_data_change = [&](std::string_view t) {
+        return ieq(t, "INSERT") || ieq(t, "UPDATE") || ieq(t, "DELETE") ||
+               ieq(t, "MERGE");
+    };
 
     std::size_t i = 0;
     while (i < sql.size() &&
@@ -89,14 +96,18 @@ inline bool is_read_only(std::string_view sql) noexcept {
     while (i < sql.size() && is_ident(static_cast<unsigned char>(sql[i]))) ++i;
     const std::string_view lead = sql.substr(kw_start, i - kw_start);
 
-    if (ieq(lead, "SELECT") || ieq(lead, "VALUES")) return true;
-    if (!ieq(lead, "WITH")) return false;
+    const bool lead_select = ieq(lead, "SELECT") || ieq(lead, "VALUES");
+    const bool lead_with = ieq(lead, "WITH");
+    if (!lead_select && !lead_with) return false;
 
-    // WITH: the main statement's verb is the first depth-0 keyword token; CTE
-    // bodies are parenthesised (depth >= 1), so their inner SELECTs are skipped.
-    // Quoted strings and delimited identifiers are skipped so their contents
-    // (and any parens within) cannot perturb the scan.
+    // Scan the remainder. A data-change verb at ANY depth means the statement
+    // writes (e.g. FROM FINAL TABLE(INSERT …) nests the verb in parens) → not
+    // retryable. For a leading WITH, the main statement's verb is the first
+    // depth-0 keyword token (CTE bodies are parenthesised at depth >= 1) and must
+    // resolve to SELECT. Quoted strings / delimited identifiers are skipped.
     int depth = 0;
+    bool with_main_resolved = false;
+    bool with_main_select = false;
     while (i < sql.size()) {
         const char ch = sql[i];
         if (ch == '\'' || ch == '"') {
@@ -125,20 +136,24 @@ inline bool is_read_only(std::string_view sql) noexcept {
             ++i;
             continue;
         }
-        if (depth == 0 && is_ident(static_cast<unsigned char>(ch))) {
+        if (is_ident(static_cast<unsigned char>(ch))) {
             const std::size_t s = i;
             while (i < sql.size() && is_ident(static_cast<unsigned char>(sql[i])))
                 ++i;
             const std::string_view tok = sql.substr(s, i - s);
-            if (ieq(tok, "SELECT")) return true;
-            if (ieq(tok, "INSERT") || ieq(tok, "UPDATE") || ieq(tok, "DELETE") ||
-                ieq(tok, "MERGE"))
-                return false;
-            continue;  // CTE name / AS / other keyword — keep scanning
+            if (is_data_change(tok)) return false;  // write at any depth
+            if (lead_with && depth == 0 && !with_main_resolved &&
+                ieq(tok, "SELECT")) {
+                with_main_select = true;  // main statement is a SELECT
+                with_main_resolved = true;
+            }
+            continue;
         }
         ++i;
     }
-    return false;  // no resolvable main SELECT → not safe to auto-retry
+    // Leading SELECT/VALUES with no embedded write is safe; a WITH is safe only
+    // if its main statement resolved to a SELECT.
+    return lead_with ? with_main_select : true;
 }
 
 }  // namespace detail

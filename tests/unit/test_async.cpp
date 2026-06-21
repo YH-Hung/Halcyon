@@ -44,8 +44,7 @@ TEST(Executor, DrainsOutstandingTasksOnDestruction) {
 TEST(AsyncWithConnection, RunsQueryOnPooledConnection) {
     MockCliDriver driver;
     driver.resultSets.push_back(MockCliDriver::ScriptedRows{
-        {"id"}, {{halcyon::detail::cli::Value{std::int64_t{5}}},
-                 {halcyon::detail::cli::Value{std::int64_t{9}}}}});
+        {"id"}, {{halcyon::detail::cli::Value{std::int64_t{5}}}, {halcyon::detail::cli::Value{std::int64_t{9}}}}});
     PoolConfig cfg;
     cfg.startMaintenanceThread = false;
     auto pool = ConnectionPool::create(driver, {"x"}, cfg).value();

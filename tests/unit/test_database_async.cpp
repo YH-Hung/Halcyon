@@ -58,16 +58,16 @@ TEST(DatabaseAsync, TaskOutlivesLaunchingDatabaseCopy) {
     };
 
     PoolConfig cfg = noThread();
-    cfg.max = 1;  // single executor thread → deterministic task queueing
+    cfg.max = 1;                                         // single executor thread → deterministic task queueing
     auto db = Database::open(driver, "X", cfg).value();  // canonical: keeps backing alive
 
     // Occupy the one worker so the task under test queues behind it.
     auto barrier = db.executeAsync("BARRIER", 0);
     enteredFut.wait();  // worker is now parked inside the barrier's execute
 
-    auto launcher = std::make_unique<Database>(db);  // a separate handle copy
+    auto launcher = std::make_unique<Database>(db);          // a separate handle copy
     auto f = launcher->executeAsync("UPDATE t SET a=?", 1);  // queued behind barrier
-    launcher.reset();  // destroy the launching handle *before* its task runs
+    launcher.reset();                                        // destroy the launching handle *before* its task runs
 
     releaseBarrier.set_value();  // worker finishes barrier, then runs the test task
     ASSERT_TRUE(barrier.get().ok());

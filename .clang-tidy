@@ -1,0 +1,26 @@
+# Halcyon clang-tidy configuration.
+#
+# NOTE: clang-tidy was not installed in the environment where this file was
+# added, so the check selection below has not yet been run against the tree. It
+# is a conservative, bug-focused starting point (mirroring AGENTS.md's
+# "run clang-format and clang-tidy before committing"); tune it once you can run
+# `clang-tidy` locally. WarningsAsErrors is intentionally empty so findings never
+# fail a build until the selection has been vetted.
+Checks: >
+  bugprone-*,
+  -bugprone-easily-swappable-parameters,
+  performance-*,
+  portability-*,
+  google-explicit-constructor,
+  modernize-use-override,
+  modernize-use-nullptr,
+  modernize-use-equals-default,
+  modernize-use-using,
+  readability-misleading-indentation,
+  readability-non-const-parameter,
+  readability-redundant-member-init,
+  readability-redundant-string-init
+WarningsAsErrors: ''
+# Only lint Halcyon's own headers — skip the vendored driver and GoogleTest.
+HeaderFilterRegex: 'include/halcyon/'
+FormatStyle: file

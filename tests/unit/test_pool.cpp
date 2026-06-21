@@ -1,6 +1,9 @@
 #include <gtest/gtest.h>
 
+#include <atomic>
 #include <chrono>
+#include <future>
+#include <thread>
 
 #include "halcyon/pool.hpp"
 #include "mock_cli_driver.hpp"
@@ -185,6 +188,145 @@ TEST(PoolReconnect, ReturnsErrorWhenAllAttemptsFail) {
     auto pool = ConnectionPool::create(driver, {"x"}, cfg);
     ASSERT_FALSE(pool.ok());
     EXPECT_EQ(pool.error().code, ErrorCode::Connection);
+}
+
+TEST(PoolConcurrency, AcquireDoesNotHoldLockDuringConnect) {
+    MockCliDriver driver;
+    PoolConfig cfg = noThread();
+    cfg.min = 1;
+    cfg.max = 2;
+    auto pool = ConnectionPool::create(driver, {"x"}, cfg).value();  // warmup connect
+
+    // Hold the one warmed connection so the next acquire must grow → connect.
+    auto held = pool->acquire();
+    ASSERT_TRUE(held.ok());
+
+    std::promise<void> connectStarted;
+    std::promise<void> releaseConnect;
+    auto startedFut = connectStarted.get_future();
+    auto releaseFut = releaseConnect.get_future().share();
+    driver.connectHook = [&] {
+        connectStarted.set_value();
+        releaseFut.wait();  // block mid-connect until the test releases us
+    };
+
+    std::thread grower([&] {
+        auto pc = pool->acquire();  // grows the pool: connects (and blocks)
+        (void)pc;                   // released at thread exit
+    });
+    startedFut.wait();  // grower is now blocked inside connect()
+
+    // While the grower is mid-connect, an unrelated pool operation must not block
+    // on mu_. If the pool held its mutex across connect, this would hang.
+    auto idleFut =
+        std::async(std::launch::async, [&] { return pool->idle_count(); });
+    auto status = idleFut.wait_for(std::chrono::seconds(2));
+
+    releaseConnect.set_value();  // let the grower finish before any assertion
+    grower.join();
+    auto idleVal = idleFut.get();
+
+    EXPECT_EQ(status, std::future_status::ready)
+        << "pool mutex was held during connect (idle_count blocked)";
+    EXPECT_EQ(idleVal, 0u);
+}
+
+TEST(PoolConcurrency, MaintainDoesNotHoldLockDuringConnect) {
+    MockCliDriver driver;
+    PoolConfig cfg = noThread();
+    cfg.min = 2;
+    cfg.max = 2;
+    auto pool = ConnectionPool::create(driver, {"x"}, cfg).value();  // warms 2
+    ASSERT_EQ(pool->total_count(), 2u);
+
+    // Discard one connection so the next maintain() pass must refill up to min.
+    {
+        auto pc = pool->acquire();
+        ASSERT_TRUE(pc.ok());
+        pc.value().markBroken();
+    }
+    ASSERT_EQ(pool->total_count(), 1u);
+
+    std::promise<void> connectStarted;
+    std::promise<void> releaseConnect;
+    auto startedFut = connectStarted.get_future();
+    auto releaseFut = releaseConnect.get_future().share();
+    driver.connectHook = [&] {
+        connectStarted.set_value();
+        releaseFut.wait();  // block mid-connect until the test releases us
+    };
+
+    std::thread mt([&] { pool->maintain(); });  // reaps, then refills (connects)
+    startedFut.wait();                          // maintain() is now blocked inside the refill connect
+
+    // While the refill is mid-connect, an unrelated pool operation must not block
+    // on mu_. If maintain() held its mutex across connect, this would hang.
+    auto fut =
+        std::async(std::launch::async, [&] { return pool->total_count(); });
+    auto status = fut.wait_for(std::chrono::seconds(2));
+
+    releaseConnect.set_value();  // let the refill finish before any assertion
+    mt.join();
+    auto val = fut.get();
+
+    EXPECT_EQ(status, std::future_status::ready)
+        << "pool mutex was held during maintain() connect";
+    EXPECT_EQ(val, 1u);                  // refill not yet committed when sampled mid-connect
+    EXPECT_EQ(pool->total_count(), 2u);  // refill completed
+}
+
+TEST(PoolConcurrency, MaintainRefillFailureWakesAcquireWaiter) {
+    MockCliDriver driver;
+    PoolConfig cfg = noThread();
+    cfg.min = 1;
+    cfg.max = 1;
+    cfg.acquireTimeout = 5s;      // large, so a missed wakeup is observable
+    cfg.backoff.maxAttempts = 1;  // a single failed connect attempt is terminal
+    cfg.backoff.sleep = [](std::chrono::milliseconds) {};
+    auto pool = ConnectionPool::create(driver, {"x"}, cfg).value();  // warms 1
+
+    // Empty the single slot so the pool must grow/refill again.
+    {
+        auto pc = pool->acquire();
+        ASSERT_TRUE(pc.ok());
+        pc.value().markBroken();
+    }
+    ASSERT_EQ(pool->total_count(), 0u);
+
+    std::promise<void> connectStarted;
+    std::promise<void> releaseConnect;
+    auto startedFut = connectStarted.get_future();
+    auto releaseFut = releaseConnect.get_future().share();
+    std::atomic<bool> firstConnect{true};
+    driver.connectHook = [&] {
+        if (firstConnect.exchange(false)) {
+            connectStarted.set_value();
+            releaseFut.wait();  // block maintain()'s refill connect
+        }
+    };
+    Error e;
+    e.code = ErrorCode::Connection;
+    e.retriable = true;
+    driver.connectErrors.push_back(e);  // maintain()'s refill connect fails
+
+    std::thread mt([&] { pool->maintain(); });  // reserves pending_, connect blocks
+    startedFut.wait();                          // pending_ == 1, maintain parked inside connect
+
+    // An acquirer now blocks because slots_(0) + pending_(1) >= max(1).
+    auto acq = std::async(std::launch::async, [&] { return pool->acquire(); });
+    std::this_thread::sleep_for(200ms);  // let the acquirer park on cv_
+
+    releaseConnect.set_value();  // maintain()'s connect fails → pending_ drops
+
+    // With the fix, the freed capacity wakes the acquirer at once; without it the
+    // acquirer sleeps until acquireTimeout (5s).
+    auto status = acq.wait_for(2s);
+    mt.join();
+    auto lease = acq.get();
+
+    EXPECT_EQ(status, std::future_status::ready)
+        << "acquire waiter not woken after maintain() refill failure";
+    EXPECT_TRUE(lease.ok());
 }
 
 TEST(PoolStatementCache, ReusesPreparedStatementAcrossAcquires) {

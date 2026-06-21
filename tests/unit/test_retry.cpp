@@ -30,7 +30,7 @@ TEST(Backoff, ExponentialAndCapped) {
     EXPECT_EQ(b.delay_for(1), 10ms);
     EXPECT_EQ(b.delay_for(2), 20ms);
     EXPECT_EQ(b.delay_for(3), 40ms);
-    EXPECT_EQ(b.delay_for(4), 50ms);  // capped
+    EXPECT_EQ(b.delay_for(4), 50ms);   // capped
     EXPECT_EQ(b.delay_for(99), 50ms);  // no overflow, still capped
 }
 
@@ -59,8 +59,8 @@ TEST(WithRetry, RetriesRetriableUpToMaxAttempts) {
     });
     ASSERT_FALSE(r.ok());
     EXPECT_EQ(r.error().code, ErrorCode::Transient);
-    EXPECT_EQ(calls, 3);            // initial + 2 retries
-    EXPECT_EQ(slept.size(), 2u);   // slept before each retry
+    EXPECT_EQ(calls, 3);          // initial + 2 retries
+    EXPECT_EQ(slept.size(), 2u);  // slept before each retry
 }
 
 TEST(WithRetry, DoesNotRetryNonRetriable) {
@@ -125,4 +125,22 @@ TEST(IsReadOnly, WithMustResolveToSelectNotDataChange) {
     EXPECT_FALSE(is_read_only("WITH t AS (SELECT 1) UPDATE x SET a = 1"));
     EXPECT_FALSE(is_read_only("WITH t AS (SELECT 1) MERGE INTO x USING t ON x.id = t.id"));
     EXPECT_FALSE(is_read_only("with t as (select 1) delete from x"));
+}
+
+TEST(IsReadOnly, RejectsDataChangeTableReference) {
+    using halcyon::detail::is_read_only;
+    // SELECT … FROM {FINAL|NEW|OLD} TABLE(<data-change>) performs a write despite
+    // the leading SELECT, so it must NOT be auto-retried — replaying it can
+    // duplicate the embedded INSERT/UPDATE/DELETE/MERGE.
+    EXPECT_FALSE(is_read_only("SELECT * FROM FINAL TABLE (INSERT INTO t VALUES (1))"));
+    EXPECT_FALSE(is_read_only("SELECT c1 FROM NEW TABLE (UPDATE t SET a = 1)"));
+    EXPECT_FALSE(is_read_only("SELECT * FROM OLD TABLE (DELETE FROM t WHERE id = ?)"));
+    EXPECT_FALSE(
+        is_read_only("SELECT * FROM FINAL TABLE (MERGE INTO t USING s ON t.id = s.id "
+                     "WHEN MATCHED THEN UPDATE SET a = 1)"));
+    // The same hidden write nested inside a CTE body must also be rejected.
+    EXPECT_FALSE(is_read_only(
+        "WITH c AS (SELECT * FROM FINAL TABLE (INSERT INTO t VALUES (1))) SELECT * FROM c"));
+    // A plain read-only SELECT with a subquery remains safe to auto-retry.
+    EXPECT_TRUE(is_read_only("SELECT * FROM t WHERE id IN (SELECT id FROM s)"));
 }

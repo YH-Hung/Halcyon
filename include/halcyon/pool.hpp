@@ -155,10 +155,13 @@ public:
                     detail::PoolSlot* s = idle_.front();
                     idle_.pop_front();
                     if (config_.validateOnAcquire) {
-                        auto v = ensure_alive_locked(s, pm);
+                        // Validates (reconnecting if dead) WITHOUT mu_ held; s is
+                        // ours (popped) but stays in slots_ throughout.
+                        auto v = ensure_alive(lk, s, pm);
                         if (!v.ok()) {
                             remove_slot_locked(s);
                             snapshot_gauge_locked(pm);
+                            cv_.notify_one();  // capacity freed → wake a waiter
                             return v.error();
                         }
                     }
@@ -167,16 +170,27 @@ public:
                     pm.acquireWait = true;
                     return PooledConnection(this, s);
                 }
-                if (slots_.size() < config_.max) {
-                    auto c = make_connection();  // note: holds lock during backoff
-                    if (!c.ok()) return c.error();
+                if (slots_.size() + pending_ < config_.max) {
+                    // Reserve capacity (pending_), then connect WITHOUT mu_ held
+                    // so a slow Db2 connect / backoff sleep can't block other
+                    // acquirers, releasers, or the destructor. pending_ keeps
+                    // concurrent acquirers from collectively exceeding max.
+                    ++pending_;
+                    lk.unlock();
+                    auto c = make_connection();
+                    lk.lock();
+                    --pending_;
+                    if (!c.ok()) {
+                        cv_.notify_one();  // capacity freed → wake a waiter
+                        return c.error();
+                    }
                     detail::PoolSlot* s = add_active_slot(std::move(c.value()));
                     snapshot_gauge_locked(pm);  // final state: active (leased out)
                     pm.acquireWait = true;
                     return PooledConnection(this, s);
                 }
                 if (cv_.wait_until(lk, deadline) == std::cv_status::timeout &&
-                    idle_.empty() && slots_.size() >= config_.max) {
+                    idle_.empty() && slots_.size() + pending_ >= config_.max) {
                     Error e;
                     e.code = ErrorCode::Pool;
                     e.message = "connection acquire timed out";
@@ -325,12 +339,22 @@ private:
         idle_.push_back(add_active_slot(std::move(conn)));
     }
 
-    // Validates a slot and reconnects it in place if dead. Caller holds the lock;
-    // a reconnect is RECORDED into pm and emitted after the lock is released.
-    Result<void> ensure_alive_locked(detail::PoolSlot* s, PendingMetrics& pm) {
+    // Validates a slot and reconnects it in place if dead. Drops mu_ (via lk) for
+    // the isAlive probe and the reconnect so a slow/dead Db2 connection can't
+    // block other callers; s is caller-owned (already popped from idle_) and
+    // stays in slots_ across the gap, so it can't be reaped meanwhile. The lock
+    // is always re-held on return. A reconnect is RECORDED into pm and emitted
+    // after the lock is released.
+    Result<void> ensure_alive(std::unique_lock<std::mutex>& lk,
+                              detail::PoolSlot* s, PendingMetrics& pm) {
+        lk.unlock();
         auto a = driver_->isAlive(s->conn->handle());
-        if (a.ok() && a.value()) return Result<void>();
+        if (a.ok() && a.value()) {
+            lk.lock();
+            return Result<void>();
+        }
         auto c = make_connection();
+        lk.lock();
         if (!c.ok()) return c.error();
         s->conn = std::move(c.value());
         s->created_at = config_.now();
@@ -388,6 +412,7 @@ private:
     std::condition_variable maint_cv_;                      // wakes the reaper to stop
     std::vector<std::unique_ptr<detail::PoolSlot>> slots_;  // all (idle + active)
     std::deque<detail::PoolSlot*> idle_;
+    std::size_t pending_ = 0;  // in-flight connects (reserved against max)
     bool stopping_ = false;
     std::thread maintenance_;
 
@@ -409,33 +434,45 @@ inline void PooledConnection::release() {
 
 inline void ConnectionPool::maintain() {
     PendingMetrics pm;
-    {
-        std::lock_guard<std::mutex> lk(mu_);
-        const auto now = config_.now();
+    std::unique_lock<std::mutex> lk(mu_);
+    const auto now = config_.now();
 
-        std::deque<detail::PoolSlot*> keep;
-        for (detail::PoolSlot* s : idle_) {
-            const bool expired_life = (now - s->created_at) >= config_.maxLifetime;
-            const bool expired_idle = (now - s->last_used_at) >= config_.idleTimeout;
-            const bool over_min = slots_.size() > config_.min;
-            if (expired_life || (expired_idle && over_min)) {
-                remove_slot_locked(s);  // Connection dtor disconnects
-            } else {
-                keep.push_back(s);
-            }
+    std::deque<detail::PoolSlot*> keep;
+    for (detail::PoolSlot* s : idle_) {
+        const bool expired_life = (now - s->created_at) >= config_.maxLifetime;
+        const bool expired_idle = (now - s->last_used_at) >= config_.idleTimeout;
+        const bool over_min = slots_.size() > config_.min;
+        if (expired_life || (expired_idle && over_min)) {
+            remove_slot_locked(s);  // Connection dtor disconnects
+        } else {
+            keep.push_back(s);
         }
-        idle_ = std::move(keep);
-
-        // Refill up to min (best effort; a failed connect is retried next pass).
-        while (slots_.size() < config_.min) {
-            auto c = make_connection();
-            if (!c.ok()) break;
-            add_idle_slot(std::move(c.value()));
-        }
-        // Single gauge sample at the final consistent state (idle_ rebuilt,
-        // refill done) — never mid-reap, so active can't read negative.
-        snapshot_gauge_locked(pm);
     }
+    idle_ = std::move(keep);
+
+    // Refill up to min (best effort; a failed connect is retried next pass).
+    // Connect WITHOUT mu_ held (reserving via pending_, like acquire()) so a slow
+    // Db2 reconnect / backoff sleep on this background path can't block
+    // acquire/release/destruction.
+    while (!stopping_ && slots_.size() + pending_ < config_.min) {
+        ++pending_;
+        lk.unlock();
+        auto c = make_connection();
+        lk.lock();
+        --pending_;
+        const bool added = c.ok() && !stopping_;
+        if (added) add_idle_slot(std::move(c.value()));
+        // pending_ was just released (and a slot may have been added), so capacity
+        // is free — wake a waiter that blocked on slots_ + pending_ >= max. Doing
+        // this every iteration (not only on success) ensures a refill connect
+        // failure doesn't leave a waiter asleep until acquireTimeout.
+        cv_.notify_one();
+        if (!added) break;  // connect failed or shutting down
+    }
+    // Single gauge sample at the final consistent state (idle_ rebuilt, refill
+    // done) — never mid-reap, so active can't read negative.
+    snapshot_gauge_locked(pm);
+    lk.unlock();
     flush_metrics(pm);  // emit after releasing mu_
 }
 

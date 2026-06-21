@@ -27,9 +27,13 @@ class Transaction;  // fwd (defined in transaction.hpp)
 // current position (forward-only); reads columns lazily via the seam.
 class Row {
 public:
+    // owner is the streaming ResultSet this row belongs to (null for a Row not
+    // backed by one, e.g. map_row's direct reads). When set, a getColumn failure
+    // is recorded on it so a mid-stream connection drop during SQLGetData can be
+    // detected and the connection discarded rather than returned to the pool.
     Row(detail::cli::ICliDriver& driver, detail::cli::StatementHandle stmt,
-        std::size_t columns)
-        : driver_(&driver), stmt_(stmt), columns_(columns) {}
+        std::size_t columns, ResultSet* owner = nullptr)
+        : driver_(&driver), stmt_(stmt), columns_(columns), owner_(owner) {}
 
     std::size_t column_count() const noexcept { return columns_; }
 
@@ -63,6 +67,11 @@ private:
             if (!cell.ok()) {
                 ok = false;
                 err = cell.error();
+                // A driver-side read failure (e.g. connection drop during
+                // SQLGetData) is recorded on the owning ResultSet so the cursor's
+                // lease/connection can be discarded — a from_value mapping error
+                // below is client-side and deliberately left untouched.
+                record_read_error(err);
                 return;
             }
             using F = std::remove_pointer_t<decltype(slot)>;
@@ -79,9 +88,14 @@ private:
         return out;
     }
 
+    // Records a column-read failure on the owning ResultSet (if any). Defined out
+    // of line below, once ResultSet is complete.
+    void record_read_error(const Error& e) const;
+
     detail::cli::ICliDriver* driver_;
     detail::cli::StatementHandle stmt_;
     std::size_t columns_;
+    ResultSet* owner_ = nullptr;
 };
 
 // A prepared, reusable statement. Owns its driver statement handle and finalizes
@@ -163,6 +177,16 @@ public:
     const std::optional<Error>& error() const noexcept { return error_; }
     bool ok() const noexcept { return !error_.has_value(); }
 
+    // Records a column-read failure (from Row::try_as) so a mid-stream driver
+    // error during SQLGetData is treated like a fetch failure: the first error is
+    // kept, and the cached statement is poisoned so its lease is finalized +
+    // dropped on release. The facade's QueryResult then discards a connection-
+    // class error's connection instead of returning it to the pool.
+    void note_column_error(const Error& e) {
+        if (!error_) error_ = e;
+        if (lease_) lease_->poison();
+    }
+
     class iterator {
     public:
         using iterator_category = std::input_iterator_tag;
@@ -202,7 +226,7 @@ public:
                 row_.reset();
                 return;
             }
-            row_.emplace(*rs_->driver_, rs_->stmt_, rs_->columns_);
+            row_.emplace(*rs_->driver_, rs_->stmt_, rs_->columns_, rs_);
         }
         ResultSet* rs_ = nullptr;
         bool at_end_ = true;
@@ -218,12 +242,19 @@ private:
         : driver_(driver), stmt_(stmt), columns_(columns) {}
 
     friend class Connection;  // for the owning-ResultSet constructor
+    friend class Row;         // for note_column_error via Row::record_read_error
     detail::cli::ICliDriver* driver_;
     detail::cli::StatementHandle stmt_;
     std::size_t columns_;
     std::optional<Error> error_;                   // set if a fetch failed mid-iteration
     std::optional<detail::StatementLease> lease_;  // owns the cached/transient stmt
 };
+
+// Out-of-line now that ResultSet is complete: forward a column-read failure to
+// the owning streaming ResultSet (no-op for a Row without one).
+inline void Row::record_read_error(const Error& e) const {
+    if (owner_) owner_->note_column_error(e);
+}
 
 // Out-of-line definition now that ResultSet is complete.
 template <class... Args>

@@ -161,9 +161,11 @@ public:
                 bp.sqlType = SQL_VARCHAR;
                 bp.length = SQL_NULL_DATA;
             } else if (auto* b = std::get_if<bool>(&v)) {
-                bp.cType = SQL_C_SBIGINT;
-                bp.sqlType = SQL_BIGINT;
-                bp.i64 = *b ? 1 : 0;
+                // Bind as SQL_C_BIT (spec §7): a single 0/1 byte kept in buf,
+                // bound through the generic buffer path below.
+                bp.cType = SQL_C_BIT;
+                bp.sqlType = SQL_BIT;
+                bp.buf.assign(1, static_cast<char>(*b ? 1 : 0));
                 bp.length = 0;
             } else if (auto* i64 = std::get_if<std::int64_t>(&v)) {
                 bp.cType = SQL_C_SBIGINT;

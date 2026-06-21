@@ -4,6 +4,7 @@
 #include "halcyon/async.hpp"
 #include "halcyon/connection.hpp"
 #include "halcyon/database.hpp"
+#include "halcyon/detail/cli/db2_cli_driver.hpp"
 #include "halcyon/error.hpp"
 #include "halcyon/observability/config.hpp"
 #include "halcyon/observability/metrics.hpp"
@@ -15,4 +16,3 @@
 #include "halcyon/transaction.hpp"
 #include "halcyon/types.hpp"
 #include "halcyon/version.hpp"
-#include "halcyon/detail/cli/db2_cli_driver.hpp"

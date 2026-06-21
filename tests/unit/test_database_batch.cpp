@@ -64,6 +64,27 @@ TEST(Batch, StopsAndReturnsErrorOnRowFailure) {
     EXPECT_EQ(n.error().code, halcyon::ErrorCode::Constraint);
 }
 
+TEST(Batch, ConnectionErrorDiscardsConnection) {
+    MockCliDriver driver;
+    PoolConfig cfg = noThread();
+    cfg.min = 1;
+    cfg.max = 1;
+    auto db = Database::open(driver, "X", cfg).value();
+    ASSERT_EQ(driver.connectCalls, 1);
+
+    halcyon::Error ce;
+    ce.code = halcyon::ErrorCode::Connection;
+    ce.message = "dead";
+    driver.executeErrors.push_back(ce);  // first row's execute fails
+
+    auto batch = halcyon::batchOf<Pair>({{1, "a"}, {2, "b"}});
+    auto n = db.executeBatch("INSERT INTO t(a,b) VALUES (?,?)", batch);
+    ASSERT_FALSE(n.ok());
+    EXPECT_EQ(n.error().code, halcyon::ErrorCode::Connection);
+    // The dead connection is discarded (markBroken), not returned to the pool.
+    EXPECT_EQ(driver.disconnectCalls, 1);
+}
+
 TEST(Batch, TupleRowsBuildPositionalBinds) {
     MockCliDriver driver;
     driver.execRowCounts.push_back(1);

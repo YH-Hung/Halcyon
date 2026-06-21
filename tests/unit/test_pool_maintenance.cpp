@@ -35,7 +35,11 @@ TEST(PoolMaintenance, ReapsIdleBeyondTimeoutDownToMin) {
     cfg.now = clk.fn();
     auto pool = ConnectionPool::create(driver, {"x"}, cfg).value();
 
-    { auto a = pool->acquire(); auto b = pool->acquire(); auto c = pool->acquire(); }
+    {
+        auto a = pool->acquire();
+        auto b = pool->acquire();
+        auto c = pool->acquire();
+    }
     EXPECT_EQ(pool->idle_count(), 3u);
 
     clk.advance(200ms);
@@ -74,8 +78,8 @@ TEST(PoolMaintenance, ReapsBeyondMaxLifetimeEvenAtMin) {
 
     clk.advance(200ms);
     pool->maintain();
-    EXPECT_EQ(pool->total_count(), 1u);   // replaced, not dropped
-    EXPECT_EQ(driver.connectCalls, 2);    // old reaped + fresh refill
+    EXPECT_EQ(pool->total_count(), 1u);  // replaced, not dropped
+    EXPECT_EQ(driver.connectCalls, 2);   // old reaped + fresh refill
     EXPECT_EQ(driver.disconnectCalls, 1);
 }
 

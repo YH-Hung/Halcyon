@@ -39,16 +39,26 @@ inline std::string_view op_label(std::string_view sql) {
 // allocation — keeps label cardinality bounded to the ErrorCode enum.
 inline std::string_view code_label(ErrorCode code) {
     switch (code) {
-        case ErrorCode::Ok: return "ok";
-        case ErrorCode::Connection: return "connection";
-        case ErrorCode::Timeout: return "timeout";
-        case ErrorCode::Constraint: return "constraint";
-        case ErrorCode::Syntax: return "syntax";
-        case ErrorCode::Deadlock: return "deadlock";
-        case ErrorCode::Transient: return "transient";
-        case ErrorCode::Mapping: return "mapping";
-        case ErrorCode::Pool: return "pool";
-        case ErrorCode::Unknown: return "unknown";
+        case ErrorCode::Ok:
+            return "ok";
+        case ErrorCode::Connection:
+            return "connection";
+        case ErrorCode::Timeout:
+            return "timeout";
+        case ErrorCode::Constraint:
+            return "constraint";
+        case ErrorCode::Syntax:
+            return "syntax";
+        case ErrorCode::Deadlock:
+            return "deadlock";
+        case ErrorCode::Transient:
+            return "transient";
+        case ErrorCode::Mapping:
+            return "mapping";
+        case ErrorCode::Pool:
+            return "pool";
+        case ErrorCode::Unknown:
+            return "unknown";
     }
     return "unknown";
 }

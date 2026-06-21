@@ -52,10 +52,15 @@ public:
     // worker thread mid-call to make async/lifetime ordering deterministic.
     std::function<void()> executeHook;
 
+    // Optional gate invoked at the top of every connect(); lets a test block a
+    // worker thread mid-connect to assert the pool mutex is not held meanwhile.
+    std::function<void()> connectHook;
+
     std::vector<std::string> preparedSql;
     std::map<StatementHandle, StmtState> statements;
 
     Result<ConnectionHandle> connect(const ConnectionParams& params) override {
+        if (connectHook) connectHook();
         ++connectCalls;
         connectParams.push_back(params);
         if (!connectErrors.empty()) {
@@ -153,7 +158,15 @@ public:
                             static_cast<long>(s.cursor.rows.size()));
     }
 
+    // --- getColumn error injection (e.g. a connection drop during SQLGetData) ---
+    Error getColumnError;
+    int failGetColumnOnCall = 0;  // 1-based getColumn() call index; 0 = never
+    int getColumnCalls = 0;
+
     Result<Value> getColumn(StatementHandle stmt, std::size_t index) override {
+        ++getColumnCalls;
+        if (failGetColumnOnCall != 0 && getColumnCalls == failGetColumnOnCall)
+            return Result<Value>(getColumnError);
         auto& s = statements.at(stmt);
         if (s.position < 0 ||
             s.position >= static_cast<long>(s.cursor.rows.size())) {

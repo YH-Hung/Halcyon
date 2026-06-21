@@ -333,7 +333,7 @@ inline Result<std::chrono::system_clock::time_point> parse_timestamp(
     if (np < 6)
         return mapping_error("invalid timestamp text: '" + s + "'");
     long long micros = np >= 7 ? parts[6] : 0;
-    for (std::size_t k = frac_digits; k > 6; --k) micros /= 10;  // trim > microsec
+    for (std::size_t k = frac_digits; k > 6; --k) micros /= 10;             // trim > microsec
     for (std::size_t k = frac_digits; k < 6 && np >= 7; ++k) micros *= 10;  // pad
     const long long days =
         days_from_civil(parts[0], static_cast<unsigned>(parts[1]),
@@ -421,9 +421,17 @@ Result<void> assign_fields(T& out, const Tuple& mptrs,
         auto mp = std::get<i>(mptrs);
         using F = std::remove_reference_t<decltype(out.*mp)>;
         auto cell = driver.getColumn(stmt, i);
-        if (!cell.ok()) { ok = false; err = cell.error(); return; }
+        if (!cell.ok()) {
+            ok = false;
+            err = cell.error();
+            return;
+        }
         auto v = TypeBinder<F>::from_value(cell.value());
-        if (!v.ok()) { ok = false; err = v.error(); return; }
+        if (!v.ok()) {
+            ok = false;
+            err = v.error();
+            return;
+        }
         out.*mp = std::move(v.value());
     };
     (step(std::integral_constant<std::size_t, I>{}), ...);
@@ -477,11 +485,11 @@ Result<T> map_row(detail::cli::ICliDriver& driver,
     HALCYON_PP_EXPAND(HALCYON_PP_CAT(HALCYON_FE_, HALCYON_PP_NARG(__VA_ARGS__))(T, __VA_ARGS__))
 
 // Supports up to 10 fields; extend the HALCYON_FE_<n>/HALCYON_PP_* ladder for more.
-#define HALCYON_REFLECT(Type, ...)                                          \
-    template <>                                                             \
-    struct halcyon::reflect::Reflected<Type> : std::true_type {             \
+#define HALCYON_REFLECT(Type, ...)                                               \
+    template <>                                                                  \
+    struct halcyon::reflect::Reflected<Type> : std::true_type {                  \
         static constexpr std::size_t field_count = HALCYON_PP_NARG(__VA_ARGS__); \
-        static auto members() {                                             \
-            return std::make_tuple(HALCYON_MEMBER_PTRS(Type, __VA_ARGS__)); \
-        }                                                                   \
+        static auto members() {                                                  \
+            return std::make_tuple(HALCYON_MEMBER_PTRS(Type, __VA_ARGS__));      \
+        }                                                                        \
     }

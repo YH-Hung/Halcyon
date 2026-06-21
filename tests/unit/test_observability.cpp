@@ -304,7 +304,7 @@ TEST(Observability, MaintainGaugeNeverNegativeDuringReap) {
     cfg.min = 1;
     cfg.max = 4;
     cfg.idleTimeout = std::chrono::milliseconds(0);  // idle slots reapable
-    cfg.maxLifetime = std::chrono::hours(2);          // not lifetime-expired
+    cfg.maxLifetime = std::chrono::hours(2);         // not lifetime-expired
     auto clock = std::make_shared<halcyon::Clock::time_point>(
         halcyon::Clock::now());
     cfg.now = [clock] { return *clock; };

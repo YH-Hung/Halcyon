@@ -12,7 +12,7 @@ A modern **C++17** client library for **IBM Db2**, built on the IBM Db2 CLI (`sq
 - **Transparent reconnect & safe auto-retry** — recovers from transient failures without caller involvement
 - **Async** — `std::future`-based `queryAsync`/`executeAsync`; coroutine-ready for a future C++20 layer
 - **RAII transactions** — guard and functional `transaction(...)` helper
-- **Bulk/batch insert** — `executeBatch` with array parameters (v1 in-scope)
+- **Bulk/batch insert** — `executeBatch` reuses one prepared statement across rows (per-row execute, accumulated row counts; not server-side array binding)
 - **Optional observability** — Prometheus metrics and OpenTelemetry tracing, zero overhead when disabled
 - **Mockable seam** — `ICliDriver` interface keeps all IBM CLI details behind a single boundary; unit tests need no live database
 
@@ -61,14 +61,21 @@ auto users2 = query_as<User>(db, "SELECT id, name FROM users WHERE id = :id",
 // Async
 std::future<Result<std::vector<User>>> f = db.queryAsync<User>("SELECT id, name FROM users");
 
-// Transaction — functional (commits on success, rolls back on error)
-db.transaction([&](Transaction& tx) {
-    tx.execute("INSERT INTO orders(product_id, qty) VALUES (?, ?)", 42, 3);
-    tx.execute("UPDATE stock SET qty = qty - ? WHERE product_id = ?", 3, 42);
+// Transaction — functional (commits on a successful Result, rolls back on an
+// error Result or a thrown exception). The lambda returns Result<T>.
+db.transaction([&](Transaction& tx) -> Result<void> {
+    if (auto r = tx.execute("INSERT INTO orders(product_id, qty) VALUES (?, ?)", 42, 3);
+        !r.ok())
+        return r.error();
+    if (auto r = tx.execute("UPDATE stock SET qty = qty - ? WHERE product_id = ?", 3, 42);
+        !r.ok())
+        return r.error();
+    return {};  // success → commit
 });
 
-// Transaction — RAII (auto-rollback unless committed)
-auto tx = db.begin();
+// Transaction — RAII (auto-rollback unless committed). begin() returns
+// Result<ScopedTransaction>; unwrap it (or check the Result first).
+auto tx = db.begin().value();
 tx.execute("UPDATE account SET balance = balance - ? WHERE id = ?", 100, 1);
 tx.execute("UPDATE account SET balance = balance + ? WHERE id = ?", 100, 2);
 tx.commit();
@@ -116,7 +123,9 @@ docker compose -f docker/docker-compose.yml down
 
 | Option | Default | Description |
 |---|---|---|
-| `HALCYON_BUILD_TESTS` | `ON` | Build unit and integration tests |
+| `HALCYON_BUILD_TESTS` | `ON` | Build the unit tests |
+| `HALCYON_BUILD_INTEGRATION_TESTS` | `OFF` | Build the Dockerized Db2 integration tests (run only when `HALCYON_TEST_DSN` is set) |
+| `HALCYON_BUILD_SMOKE_TEST` | `ON` | Add the install / `find_package` smoke test (only with `HALCYON_BUILD_TESTS`) |
 | `HALCYON_BUILD_EXAMPLES` | `OFF` | Build example programs |
 | `HALCYON_WITH_PROMETHEUS` | `OFF` | Compile Prometheus metrics adapter |
 | `HALCYON_WITH_OTEL` | `OFF` | Compile OpenTelemetry tracing adapter |

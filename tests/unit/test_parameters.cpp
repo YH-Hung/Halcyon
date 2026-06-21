@@ -5,8 +5,8 @@
 
 #include "halcyon/parameters.hpp"
 
-using halcyon::params;
 using halcyon::ErrorCode;
+using halcyon::params;
 using halcyon::detail::cli::Value;
 
 TEST(Parameters, PacksAnonymousArgsInOrder) {

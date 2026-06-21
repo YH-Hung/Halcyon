@@ -44,7 +44,7 @@ std::vector<detail::cli::Value> pack_params(const Args&... args) {
 }
 
 struct PreparedSql {
-    std::string sql;                       // ':name' rewritten to positional '?'
+    std::string sql;  // ':name' rewritten to positional '?'
     std::vector<detail::cli::Value> params;
 };
 

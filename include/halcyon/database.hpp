@@ -105,6 +105,16 @@ public:
     QueryResult& operator=(QueryResult&&) noexcept = default;
     QueryResult(const QueryResult&) = delete;
     QueryResult& operator=(const QueryResult&) = delete;
+    ~QueryResult() {
+        // A mid-stream fetch failure of connection class means the leased
+        // connection is dead — discard it instead of returning it to the pool.
+        // No-op on a moved-from instance (lease_ released) or a clean/
+        // non-connection result.
+        if (lease_.get()) {
+            const auto& e = rs_.error();
+            if (e && e->code == ErrorCode::Connection) lease_.markBroken();
+        }
+    }
 
     ResultSet& rows() noexcept { return rs_; }
     ResultSet::iterator begin() { return rs_.begin(); }
@@ -117,10 +127,25 @@ public:
 
 private:
     friend class Database;
-    QueryResult(PooledConnection lease, ResultSet rs)
-        : lease_(std::move(lease)), rs_(std::move(rs)) {}
+    QueryResult(std::shared_ptr<detail::cli::ICliDriver> driver,
+                std::shared_ptr<ConnectionPool> pool, PooledConnection lease,
+                ResultSet rs)
+        : owned_driver_(std::move(driver)),
+          pool_(std::move(pool)),
+          lease_(std::move(lease)),
+          rs_(std::move(rs)) {}
 
-    PooledConnection lease_;  // declared first → destroyed last (after rs_)
+    // Keep the backing alive for this result's whole lifetime: lease_ holds a raw
+    // ConnectionPool* and rs_'s cursor borrows the leased connection, so the pool
+    // (and, for a dsn-opened Database, the driver it owns) must outlive them even
+    // if every Database handle is destroyed first. Declaration order fixes the
+    // reverse destruction order: rs_ (closes the cursor) → lease_ (returns the
+    // connection) → pool_ (may tear the pool down) → owned_driver_ (last, so the
+    // pool's disconnects still see a live driver). owned_driver_ is null when the
+    // driver is caller-owned (injectable open).
+    std::shared_ptr<detail::cli::ICliDriver> owned_driver_;
+    std::shared_ptr<ConnectionPool> pool_;
+    PooledConnection lease_;
     ResultSet rs_;
 };
 
@@ -134,6 +159,17 @@ public:
     ScopedTransaction& operator=(ScopedTransaction&&) noexcept = default;
     ScopedTransaction(const ScopedTransaction&) = delete;
     ScopedTransaction& operator=(const ScopedTransaction&) = delete;
+    ~ScopedTransaction() {
+        // Drive any implicit rollback here (rather than leaving it to txn_'s
+        // destructor) so we can observe its outcome before lease_ is released: if
+        // the transaction left the connection dead or with autocommit in an
+        // unknown state, discard it instead of returning it to the pool. No-op on
+        // a moved-from instance (lease_ released).
+        if (lease_.get()) {
+            if (txn_.active()) txn_.rollback();
+            if (txn_.poisoned()) lease_.markBroken();
+        }
+    }
 
     Transaction* operator->() noexcept { return &txn_; }
     Transaction& operator*() noexcept { return txn_; }
@@ -162,9 +198,20 @@ public:
 
 private:
     friend class Database;
-    ScopedTransaction(PooledConnection lease, Transaction txn)
-        : lease_(std::move(lease)), txn_(std::move(txn)) {}
+    ScopedTransaction(std::shared_ptr<detail::cli::ICliDriver> driver,
+                      std::shared_ptr<ConnectionPool> pool,
+                      PooledConnection lease, Transaction txn)
+        : owned_driver_(std::move(driver)),
+          pool_(std::move(pool)),
+          lease_(std::move(lease)),
+          txn_(std::move(txn)) {}
 
+    // Keep the backing alive for the unit of work even if every Database handle
+    // is destroyed first (see QueryResult). Declaration order fixes the reverse
+    // destruction order: txn_ (rolls back if uncommitted) → lease_ (returns the
+    // connection) → pool_ → owned_driver_ (last).
+    std::shared_ptr<detail::cli::ICliDriver> owned_driver_;
+    std::shared_ptr<ConnectionPool> pool_;
     PooledConnection lease_;  // destroyed AFTER txn_
     Transaction txn_;
 };
@@ -185,9 +232,13 @@ public:
         return open(dsn, std::move(config)).value();
     }
 
-    // Injectable entry point: opens over a caller-owned driver (the caller must
-    // keep it alive for the Database's lifetime). Used by unit tests to drive the
-    // facade against a MockCliDriver with no live Db2.
+    // Injectable entry point: opens over a caller-owned driver. The driver is NOT
+    // co-owned, so the caller must keep it alive not merely for the Database's
+    // lifetime but for the lifetime of EVERY object derived from it — QueryResult,
+    // ScopedTransaction, and async futures can each outlive the Database and still
+    // use the driver. Destroying the driver while any of those are live is a
+    // use-after-free. For automatic lifetime safety, use the shared_ptr overload
+    // below. Used by unit tests to drive the facade against a MockCliDriver.
     static Result<Database> open(detail::cli::ICliDriver& driver,
                                  const std::string& dsn, PoolConfig config = {}) {
         return open_impl(nullptr, driver, dsn, std::move(config));
@@ -195,6 +246,27 @@ public:
     static Database openOrThrow(detail::cli::ICliDriver& driver,
                                 const std::string& dsn, PoolConfig config = {}) {
         return open(driver, dsn, std::move(config)).value();
+    }
+
+    // Shared-driver entry point: the Database co-owns the driver, so it stays
+    // alive as long as the Database OR any object/future derived from it (just
+    // like the driver the dsn-only open creates internally). Prefer this over the
+    // raw-reference overload whenever cursors/transactions may outlive the
+    // Database.
+    static Result<Database> open(std::shared_ptr<detail::cli::ICliDriver> driver,
+                                 const std::string& dsn, PoolConfig config = {}) {
+        if (!driver) {
+            Error e;
+            e.code = ErrorCode::Connection;
+            e.message = "null driver passed to Database::open";
+            return e;
+        }
+        auto& ref = *driver;
+        return open_impl(std::move(driver), ref, dsn, std::move(config));
+    }
+    static Database openOrThrow(std::shared_ptr<detail::cli::ICliDriver> driver,
+                                const std::string& dsn, PoolConfig config = {}) {
+        return open(std::move(driver), dsn, std::move(config)).value();
     }
 
     ConnectionPool& pool() noexcept { return *pool_; }
@@ -205,10 +277,10 @@ public:
     Result<std::int64_t> execute(const std::string& sql, const Args&... args) {
         return instrument(metrics_, tracer_, has_metrics_, has_tracer_,
                           "halcyon.execute", sql, [&] {
-            return run_with_policy(default_policy(sql), [&](Connection& c) {
-                return c.execute(sql, args...);
-            });
-        });
+                              return run_with_policy(default_policy(sql), [&](Connection& c) {
+                                  return c.execute(sql, args...);
+                              });
+                          });
     }
     template <class... Args,
               std::enable_if_t<(is_bindable<Args>::value && ...), int> = 0>
@@ -216,18 +288,18 @@ public:
                                  const Args&... args) {
         return instrument(metrics_, tracer_, has_metrics_, has_tracer_,
                           "halcyon.execute", sql, [&] {
-            return run_with_policy(policy, [&](Connection& c) {
-                return c.execute(sql, args...);
-            });
-        });
+                              return run_with_policy(policy, [&](Connection& c) {
+                                  return c.execute(sql, args...);
+                              });
+                          });
     }
     Result<std::int64_t> execute(const std::string& sql, const params& named) {
         return instrument(metrics_, tracer_, has_metrics_, has_tracer_,
                           "halcyon.execute", sql, [&] {
-            return run_with_policy(default_policy(sql), [&](Connection& c) {
-                return c.execute(sql, named);
-            });
-        });
+                              return run_with_policy(default_policy(sql), [&](Connection& c) {
+                                  return c.execute(sql, named);
+                              });
+                          });
     }
 
     // --- query (returns a lease-owning QueryResult) ---
@@ -236,18 +308,18 @@ public:
     Result<QueryResult> query(const std::string& sql, const Args&... args) {
         return instrument(metrics_, tracer_, has_metrics_, has_tracer_,
                           "halcyon.query", sql, [&] {
-            return query_impl(default_policy(sql), [&](Connection& c) {
-                return c.query(sql, args...);
-            });
-        });
+                              return query_impl(default_policy(sql), [&](Connection& c) {
+                                  return c.query(sql, args...);
+                              });
+                          });
     }
     Result<QueryResult> query(const std::string& sql, const params& named) {
         return instrument(metrics_, tracer_, has_metrics_, has_tracer_,
                           "halcyon.query", sql, [&] {
-            return query_impl(default_policy(sql), [&](Connection& c) {
-                return c.query(sql, named);
-            });
-        });
+                              return query_impl(default_policy(sql), [&](Connection& c) {
+                                  return c.query(sql, named);
+                              });
+                          });
     }
 
     // --- queryAs (materialized; no lease lifetime concern) ---
@@ -256,19 +328,19 @@ public:
     Result<std::vector<T>> queryAs(const std::string& sql, const Args&... args) {
         return instrument(metrics_, tracer_, has_metrics_, has_tracer_,
                           "halcyon.query", sql, [&] {
-            return run_with_policy(default_policy(sql), [&](Connection& c) {
-                return c.template queryAs<T>(sql, args...);
-            });
-        });
+                              return run_with_policy(default_policy(sql), [&](Connection& c) {
+                                  return c.template queryAs<T>(sql, args...);
+                              });
+                          });
     }
     template <class T>
     Result<std::vector<T>> queryAs(const std::string& sql, const params& named) {
         return instrument(metrics_, tracer_, has_metrics_, has_tracer_,
                           "halcyon.query", sql, [&] {
-            return run_with_policy(default_policy(sql), [&](Connection& c) {
-                return c.template queryAs<T>(sql, named);
-            });
-        });
+                              return run_with_policy(default_policy(sql), [&](Connection& c) {
+                                  return c.template queryAs<T>(sql, named);
+                              });
+                          });
     }
 
     // --- throwing overloads ---
@@ -296,7 +368,12 @@ public:
                                       const Batch& batch) {
         auto lease = pool_->acquire();
         if (!lease.ok()) return lease.error();
-        return lease.value()->executeBatch(sql, batch.rows);
+        auto r = lease.value()->executeBatch(sql, batch.rows);
+        // executeBatch has no auto-retry, so a dead connection would otherwise be
+        // returned to the pool — discard it here.
+        if (!r.ok() && r.error().code == ErrorCode::Connection)
+            lease.value().markBroken();
+        return r;
     }
 
     // --- transactions ---
@@ -307,8 +384,14 @@ public:
         auto lease = pool_->acquire();
         if (!lease.ok()) return lease.error();
         auto tx = lease.value()->begin();
-        if (!tx.ok()) return tx.error();
-        return ScopedTransaction(std::move(lease.value()),
+        if (!tx.ok()) {
+            // begin() flips autocommit off; a failure can leave the connection
+            // dead or with autocommit in an unknown state, so discard it rather
+            // than returning it to the pool.
+            lease.value().markBroken();
+            return tx.error();
+        }
+        return ScopedTransaction(owned_driver_, pool_, std::move(lease.value()),
                                  std::move(tx.value()));
     }
 
@@ -357,7 +440,7 @@ public:
     // valid for the task's whole lifetime.
     template <class... Args>
     std::future<Result<std::int64_t>> executeAsync(const std::string& sql,
-                                                    Args... args) {
+                                                   Args... args) {
         return exec_->submit(
             [pool = pool_, attempts = default_attempts_, sql, args...]() {
                 return instrument(
@@ -434,8 +517,8 @@ private:
     }
     template <class Op>
     Result<QueryResult> query_impl(const ExecPolicy& policy, Op&& op) {
-        return query_impl_on(*pool_, policy, std::forward<Op>(op), metrics_,
-                             has_metrics_);
+        return query_impl_on(pool_, owned_driver_, policy,
+                             std::forward<Op>(op), metrics_, has_metrics_);
     }
 
     // Wraps one logical query/execute with the terminal metrics
@@ -531,21 +614,24 @@ private:
     }
 
     // Like run_with_policy_on but preserves the successful lease inside the
-    // returned QueryResult (its cursor borrows the leased connection).
+    // returned QueryResult (its cursor borrows the leased connection). Takes the
+    // pool (and owned driver) as shared_ptrs so the returned QueryResult can keep
+    // them alive past the destruction of every Database handle (see QueryResult).
     template <class Op>
-    static Result<QueryResult> query_impl_on(ConnectionPool& pool,
-                                             const ExecPolicy& policy, Op&& op,
-                                             obs::MetricsSink* m = nullptr,
-                                             bool hasM = false) {
+    static Result<QueryResult> query_impl_on(
+        const std::shared_ptr<ConnectionPool>& pool,
+        const std::shared_ptr<detail::cli::ICliDriver>& driver,
+        const ExecPolicy& policy, Op&& op, obs::MetricsSink* m = nullptr,
+        bool hasM = false) {
         Error last;
         last.code = ErrorCode::Unknown;
         last.message = "no attempt made";
         for (int attempt = 1; attempt <= policy.maxAttempts; ++attempt) {
-            auto lease = pool.acquire();
+            auto lease = pool->acquire();
             if (!lease.ok()) return lease.error();
             auto rs = op(*lease.value());
             if (rs.ok())
-                return QueryResult(std::move(lease.value()),
+                return QueryResult(driver, pool, std::move(lease.value()),
                                    std::move(rs.value()));
             last = rs.error();
             if (last.code == ErrorCode::Connection) lease.value().markBroken();

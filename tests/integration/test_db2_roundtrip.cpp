@@ -199,6 +199,35 @@ TEST(Db2TypeMapping, BinaryDecimalTemporalRoundTrip) {
     h.execute("DROP TABLE halcyon_types");
 }
 
+// Exercises the §7 bool mapping against live Db2: a bool parameter binds as
+// SQL_C_BIT / SQL_BIT and round-trips through a SMALLINT column.
+TEST(Db2BoolMapping, BoolParameterBindsAsBitAndRoundTrips) {
+    auto d = dsn();
+    if (!d) GTEST_SKIP() << "HALCYON_TEST_DSN not set; skipping live Db2 test";
+
+    auto db = halcyon::Database::open(*d);
+    ASSERT_TRUE(db.ok()) << db.error().message;
+    auto& h = db.value();
+
+    h.execute("DROP TABLE halcyon_bool");  // ignore error if absent
+    ASSERT_TRUE(
+        h.execute("CREATE TABLE halcyon_bool(id INT NOT NULL, flag SMALLINT)").ok());
+
+    ASSERT_TRUE(h.execute("INSERT INTO halcyon_bool VALUES (?, ?)", 1, true).ok());
+    ASSERT_TRUE(h.execute("INSERT INTO halcyon_bool VALUES (?, ?)", 2, false).ok());
+
+    auto qr = h.query("SELECT flag FROM halcyon_bool ORDER BY id");
+    ASSERT_TRUE(qr.ok()) << qr.error().message;
+    std::vector<bool> flags;
+    for (auto& row : qr.value()) flags.push_back(std::get<0>(row.as<bool>()));
+    EXPECT_TRUE(qr.value().ok()) << "iteration ended on a fetch error";
+    ASSERT_EQ(flags.size(), 2u);
+    EXPECT_TRUE(flags[0]);
+    EXPECT_FALSE(flags[1]);
+
+    h.execute("DROP TABLE halcyon_bool");
+}
+
 TEST(Db2FacadeIntegration, QueryExecuteAndTransaction) {
     auto d = dsn();
     if (!d) GTEST_SKIP() << "HALCYON_TEST_DSN not set; skipping live Db2 test";

@@ -1,6 +1,8 @@
 #include <gtest/gtest.h>
 
 #include <cstdint>
+#include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -71,7 +73,10 @@ TEST(Database, QueryReleasesLeaseWhenResultDropped) {
     cfg.min = 1;
     cfg.max = 1;
     auto db = Database::open(driver, "X", cfg).value();
-    { auto qr = db.query("SELECT id, name FROM t"); ASSERT_TRUE(qr.ok()); }
+    {
+        auto qr = db.query("SELECT id, name FROM t");
+        ASSERT_TRUE(qr.ok());
+    }
     // lease returned → a second single-slot query still works
     driver.resultSets.push_back(idName(2, "b"));
     auto qr2 = db.query("SELECT id, name FROM t");
@@ -101,7 +106,10 @@ TEST(Database, NamedParamsThroughFacade) {
                        halcyon::params{{"id", 7}});
     ASSERT_TRUE(qr.ok());
     int rows = 0;
-    for (auto& row : qr.value()) { (void)row; ++rows; }
+    for (auto& row : qr.value()) {
+        (void)row;
+        ++rows;
+    }
     EXPECT_EQ(rows, 1);
 }
 
@@ -168,6 +176,218 @@ TEST(DatabaseTxn, BeginReturnsUsableTransaction) {
     ASSERT_TRUE(tx.value().execute("UPDATE t SET a=?", 1).ok());
     ASSERT_TRUE(tx.value().commit().ok());
     EXPECT_EQ(driver.commitCalls, 1);
+}
+
+TEST(DatabaseLifetime, QueryResultKeepsPoolAliveAfterDatabaseDestroyed) {
+    MockCliDriver driver;
+    driver.resultSets.push_back(idName(1, "a"));
+    PoolConfig cfg = noThread();
+    cfg.min = 1;
+    cfg.max = 1;
+    std::optional<Database> db = Database::open(driver, "X", cfg).value();
+    ASSERT_EQ(driver.connectCalls, 1);
+
+    {
+        auto qr = db->query("SELECT id, name FROM t");
+        ASSERT_TRUE(qr.ok());
+
+        // Destroy the only Database handle while the QueryResult is still alive.
+        db.reset();
+
+        // The QueryResult must keep the pool (and its leased connection) alive:
+        // nothing is disconnected yet, and the borrowed cursor is still usable
+        // — i.e. no use-after-free of pool/connection/driver state.
+        EXPECT_EQ(driver.disconnectCalls, 0);
+        int rows = 0;
+        for (auto& row : qr.value()) {
+            (void)row;
+            ++rows;
+        }
+        EXPECT_EQ(rows, 1);
+    }  // QueryResult destroyed here → connection finally torn down
+
+    EXPECT_EQ(driver.disconnectCalls, 1);
+}
+
+TEST(DatabaseLifetime, SharedDriverOutlivesDatabaseViaQueryResult) {
+    auto driver = std::make_shared<MockCliDriver>();
+    driver->resultSets.push_back(idName(1, "a"));
+    std::weak_ptr<MockCliDriver> weak = driver;
+
+    PoolConfig cfg = noThread();
+    cfg.min = 1;
+    cfg.max = 1;
+    std::optional<Database> db = Database::open(driver, "X", cfg).value();
+    driver.reset();                // caller drops its handle → the Database now co-owns it
+    ASSERT_FALSE(weak.expired());  // Database keeps the shared driver alive
+
+    {
+        auto qr = db->query("SELECT id, name FROM t");
+        ASSERT_TRUE(qr.ok());
+        db.reset();  // destroy the only Database handle
+
+        // The QueryResult keeps BOTH the pool and the (shared) driver alive, so
+        // the borrowed cursor is still safe to use — no dangling external driver.
+        EXPECT_FALSE(weak.expired());
+        int rows = 0;
+        for (auto& row : qr.value()) {
+            (void)row;
+            ++rows;
+        }
+        EXPECT_EQ(rows, 1);
+    }  // QueryResult destroyed → last driver reference released
+
+    EXPECT_TRUE(weak.expired());
+}
+
+TEST(DatabaseLifetime, ScopedTransactionKeepsPoolAliveAfterDatabaseDestroyed) {
+    MockCliDriver driver;
+    PoolConfig cfg = noThread();
+    cfg.min = 1;
+    cfg.max = 1;
+    std::optional<Database> db = Database::open(driver, "X", cfg).value();
+    ASSERT_EQ(driver.connectCalls, 1);
+
+    {
+        auto tx = db->begin();
+        ASSERT_TRUE(tx.ok());
+
+        // Destroy the only Database handle mid-transaction.
+        db.reset();
+
+        // The ScopedTransaction keeps the pool/connection alive: not yet
+        // disconnected, and still usable for execute/commit.
+        EXPECT_EQ(driver.disconnectCalls, 0);
+        ASSERT_TRUE(tx.value().execute("UPDATE t SET a=?", 1).ok());
+        ASSERT_TRUE(tx.value().commit().ok());
+    }  // ScopedTransaction destroyed here → connection finally torn down
+
+    EXPECT_EQ(driver.commitCalls, 1);
+    EXPECT_EQ(driver.disconnectCalls, 1);
+}
+
+namespace {
+halcyon::Error connError(const char* msg = "dead") {
+    halcyon::Error e;
+    e.code = halcyon::ErrorCode::Connection;
+    e.message = msg;
+    return e;
+}
+}  // namespace
+
+TEST(DatabaseBrokenConn, BeginFailureDiscardsConnection) {
+    MockCliDriver driver;
+    PoolConfig cfg = noThread();
+    cfg.min = 1;
+    cfg.max = 1;
+    auto db = Database::open(driver, "X", cfg).value();
+    ASSERT_EQ(driver.connectCalls, 1);
+
+    driver.txnErrors.push_back(connError());  // begin's setAutoCommit(false) fails
+    auto tx = db.begin();
+    ASSERT_FALSE(tx.ok());
+    // begin() can leave autocommit in an unknown state → discard the connection.
+    EXPECT_EQ(driver.disconnectCalls, 1);
+}
+
+TEST(DatabaseBrokenConn, CommitFailureDiscardsConnection) {
+    MockCliDriver driver;
+    PoolConfig cfg = noThread();
+    cfg.min = 1;
+    cfg.max = 1;
+    auto db = Database::open(driver, "X", cfg).value();
+    {
+        auto tx = db.begin();
+        ASSERT_TRUE(tx.ok());
+        driver.txnErrors.push_back(connError());  // commit fails
+        EXPECT_FALSE(tx.value().commit().ok());
+    }  // ScopedTransaction destroyed
+    EXPECT_EQ(driver.disconnectCalls, 1);
+}
+
+TEST(DatabaseBrokenConn, ImplicitRollbackFailureDiscardsConnection) {
+    MockCliDriver driver;
+    PoolConfig cfg = noThread();
+    cfg.min = 1;
+    cfg.max = 1;
+    auto db = Database::open(driver, "X", cfg).value();
+    {
+        auto tx = db.begin();
+        ASSERT_TRUE(tx.ok());
+        // No commit/rollback: the destructor's implicit rollback fails.
+        driver.txnErrors.push_back(connError());
+    }  // ScopedTransaction destroyed → implicit rollback fails → discard
+    EXPECT_EQ(driver.disconnectCalls, 1);
+}
+
+TEST(DatabaseBrokenConn, SuccessfulTransactionKeepsConnection) {
+    MockCliDriver driver;
+    PoolConfig cfg = noThread();
+    cfg.min = 1;
+    cfg.max = 1;
+    auto db = Database::open(driver, "X", cfg).value();
+    {
+        auto tx = db.begin();
+        ASSERT_TRUE(tx.ok());
+        ASSERT_TRUE(tx.value().execute("UPDATE t SET a=?", 1).ok());
+        ASSERT_TRUE(tx.value().commit().ok());
+    }  // clean commit → connection returns to the pool, not discarded
+    EXPECT_EQ(driver.disconnectCalls, 0);
+
+    auto tx2 = db.begin();  // reuses the same connection (no new connect)
+    ASSERT_TRUE(tx2.ok());
+    EXPECT_EQ(driver.connectCalls, 1);
+}
+
+TEST(DatabaseBrokenConn, MidStreamGetColumnConnectionErrorDiscardsConnection) {
+    MockCliDriver driver;
+    PoolConfig cfg = noThread();
+    cfg.min = 1;
+    cfg.max = 1;
+    driver.resultSets.push_back(idName(1, "a"));
+    driver.getColumnError = connError();
+    driver.failGetColumnOnCall = 1;  // connection drops during the first column read
+    auto db = Database::open(driver, "X", cfg).value();
+    {
+        auto qr = db.query("SELECT id, name FROM t");
+        ASSERT_TRUE(qr.ok());
+        for (auto& row : qr.value()) {
+            auto cell = row.try_as<std::int64_t, std::string>();
+            EXPECT_FALSE(cell.ok());
+            EXPECT_EQ(cell.error().code, halcyon::ErrorCode::Connection);
+        }
+        // The getColumn failure must be recorded on the ResultSet (not merely
+        // returned to the caller) so the dead connection can be discarded.
+        ASSERT_FALSE(qr.value().ok());
+        ASSERT_TRUE(qr.value().error().has_value());
+        EXPECT_EQ(qr.value().error()->code, halcyon::ErrorCode::Connection);
+    }  // QueryResult destroyed → dead connection discarded
+    EXPECT_EQ(driver.disconnectCalls, 1);
+}
+
+TEST(DatabaseBrokenConn, MidStreamFetchConnectionErrorDiscardsConnection) {
+    MockCliDriver driver;
+    PoolConfig cfg = noThread();
+    cfg.min = 1;
+    cfg.max = 1;
+    driver.resultSets.push_back(idName(1, "a"));
+    driver.fetchError = connError();
+    driver.failFetchOnCall = 1;  // first fetch (during iteration) fails
+    auto db = Database::open(driver, "X", cfg).value();
+    {
+        auto qr = db.query("SELECT id, name FROM t");
+        ASSERT_TRUE(qr.ok());
+        int rows = 0;
+        for (auto& row : qr.value()) {
+            (void)row;
+            ++rows;
+        }
+        EXPECT_EQ(rows, 0);
+        ASSERT_FALSE(qr.value().ok());
+        ASSERT_TRUE(qr.value().error().has_value());
+        EXPECT_EQ(qr.value().error()->code, halcyon::ErrorCode::Connection);
+    }  // QueryResult destroyed → dead connection discarded
+    EXPECT_EQ(driver.disconnectCalls, 1);
 }
 
 TEST(FunctionalApi, FreeFunctionsDelegateToDatabase) {

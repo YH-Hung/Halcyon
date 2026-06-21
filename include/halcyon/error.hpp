@@ -24,10 +24,10 @@ const char* to_string(ErrorCode code) noexcept;
 
 struct Error {
     ErrorCode code = ErrorCode::Unknown;
-    std::string sqlstate;       // raw 5-char SQLSTATE, e.g. "08001"
-    int nativeError = 0;        // SQLCODE / native db2 code
-    std::string message;        // diagnostic text
-    bool retriable = false;     // transient class → drives auto-retry
+    std::string sqlstate;    // raw 5-char SQLSTATE, e.g. "08001"
+    int nativeError = 0;     // SQLCODE / native db2 code
+    std::string message;     // diagnostic text
+    bool retriable = false;  // transient class → drives auto-retry
 };
 
 class Exception : public std::runtime_error {
