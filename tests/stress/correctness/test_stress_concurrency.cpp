@@ -153,9 +153,46 @@ TEST(StressScenario, ExecutorSaturationResolvesEveryFuture) {
 
 using halcyon::stress::make_cache_churn;
 
+// Thread-safe sink capturing the per-connection statement-cache counters Halcyon
+// emits (halcyon_stmt_cache_total{result=hit|miss|overflow|evict} +
+// halcyon_stmt_cache_size). Called synchronously and concurrently from every
+// leased connection, so counts are atomic and the size-max is mutex-guarded.
+struct CacheCountingSink final : halcyon::obs::MetricsSink {
+    std::atomic<long> hit{0}, miss{0}, overflow{0};
+    std::mutex mu;
+    double max_size_ = 0.0;
+
+    void counter(std::string_view name, double value,
+                 const halcyon::obs::Labels& labels) override {
+        if (name != "halcyon_stmt_cache_total") return;
+        for (const auto& kv : labels) {
+            if (kv.first != "result") continue;
+            const auto n = static_cast<long>(value);
+            if (kv.second == "hit") hit.fetch_add(n, std::memory_order_relaxed);
+            else if (kv.second == "miss") miss.fetch_add(n, std::memory_order_relaxed);
+            else if (kv.second == "overflow") overflow.fetch_add(n, std::memory_order_relaxed);
+        }
+    }
+    void histogram(std::string_view, double,
+                   const halcyon::obs::Labels&) override {}
+    void gauge(std::string_view name, double value,
+               const halcyon::obs::Labels&) override {
+        if (name != "halcyon_stmt_cache_size") return;
+        std::lock_guard<std::mutex> lk(mu);
+        if (value > max_size_) max_size_ = value;
+    }
+    double max_size() {
+        std::lock_guard<std::mutex> lk(mu);
+        return max_size_;
+    }
+};
+
 TEST(StressScenario, StatementCacheStaysCorrectUnderReuse) {
     auto fake = std::make_shared<ConcurrentFakeDriver>();
-    auto db = Database::open(fake, "dsn", config_for(ScenarioId::Cache, 2));
+    auto sink = std::make_shared<CacheCountingSink>();
+    halcyon::PoolConfig pc = config_for(ScenarioId::Cache, 2);
+    pc.observability.metrics = sink;
+    auto db = Database::open(fake, "dsn", pc);
     ASSERT_TRUE(db.ok()) << db.error().message;
 
     Workload w = make_cache_churn(db.value());
@@ -168,6 +205,14 @@ TEST(StressScenario, StatementCacheStaysCorrectUnderReuse) {
     // Reuse really happened: far fewer prepares than executes (a warm cache on a
     // reused connection re-prepares only on miss/overflow, not per call).
     EXPECT_LT(fake->prepareCalls.load(), fake->executeCalls.load());
+    // §6.3: every statement acquire resolves to exactly one of hit/miss/overflow,
+    // one per execute — so the three partition the executes exactly.
+    const long classified =
+        sink->hit.load() + sink->miss.load() + sink->overflow.load();
+    EXPECT_EQ(classified, fake->executeCalls.load());
+    EXPECT_GT(sink->hit.load(), 0);  // cache hits genuinely occurred
+    // Live cache never exceeds the configured per-connection capacity.
+    EXPECT_LE(sink->max_size(), static_cast<double>(pc.statementCacheSize));
     EXPECT_EQ(db.value().pool().active_count(), 0u);
 }
 
