@@ -40,9 +40,16 @@ A clean run under `-DHALCYON_SANITIZER=thread` is the evidence of race freedom.
 export HALCYON_TEST_DSN="DATABASE=SAMPLE;HOSTNAME=localhost;PORT=50000;UID=db2inst1;PWD=halcyon;"
 ./build/tests/stress/halcyon_stress --backend=live --scenario=pool --threads=4,8,16
 
-# CSV for plotting; --strict makes soft gates set the exit code
+# CSV for plotting; --strict makes soft gates set the exit code. In CSV mode the
+# gate lines go to stderr, so stdout (redirected here) is pure CSV.
 ./build/tests/stress/halcyon_stress --format=csv --strict > sweep.csv
 ```
+
+Each row reports throughput, p50/p95/p99/max latency, op count, tolerated-error
+count, reconnects, and cache hit-rate. The reconnect/hit-rate columns are populated
+from a metrics sink, so the harness enables Halcyon's observability hot path — a
+small, consistent overhead on throughput (the same for every cell, so scaling
+comparisons stay valid).
 
 `--scenario` accepts a comma list (e.g. `--scenario=pool,executor,cache,txn`) or
 `all`, just like `--threads`. `--duration` and `--warmup` are integer
