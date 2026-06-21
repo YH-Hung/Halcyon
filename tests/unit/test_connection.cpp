@@ -9,6 +9,7 @@
 
 using halcyon::Connection;
 using halcyon::params;
+using halcyon::detail::cli::ConnectionParams;
 using halcyon::detail::cli::Value;
 using halcyon::testing::MockCliDriver;
 
@@ -76,4 +77,65 @@ TEST(ConnectionTest, PreparedStatementIsReusable) {
     EXPECT_EQ(st.value().execute_update(1).value(), 1);
     EXPECT_EQ(st.value().execute_update(2).value(), 1);
     EXPECT_EQ(driver.preparedSql.size(), 1u);  // prepared once, executed twice
+}
+
+TEST(ConnectionCache, RepeatedQueryReusesPreparedStatement) {
+    MockCliDriver driver;
+    // Two SELECTs of the same SQL; scripted empty result sets.
+    driver.resultSets.push_back({{"id"}, {}});
+    driver.resultSets.push_back({{"id"}, {}});
+    auto conn = Connection::open(driver, ConnectionParams{"x"},
+                                 /*statementCacheSize=*/8)
+                    .value();
+
+    { auto r = conn.query("SELECT id FROM t WHERE age > ?", 21); ASSERT_TRUE(r.ok()); }
+    { auto r = conn.query("SELECT id FROM t WHERE age > ?", 21); ASSERT_TRUE(r.ok()); }
+
+    EXPECT_EQ(driver.preparedSql.size(), 1u);  // prepared once, reused
+}
+
+TEST(ConnectionCache, DisabledByDefaultPreparesEveryCall) {
+    MockCliDriver driver;
+    driver.resultSets.push_back({{"id"}, {}});
+    driver.resultSets.push_back({{"id"}, {}});
+    auto conn = Connection::open(driver, ConnectionParams{"x"}).value();  // size 0
+
+    { auto r = conn.query("SELECT id FROM t WHERE age > ?", 21); ASSERT_TRUE(r.ok()); }
+    { auto r = conn.query("SELECT id FROM t WHERE age > ?", 21); ASSERT_TRUE(r.ok()); }
+
+    EXPECT_EQ(driver.preparedSql.size(), 2u);  // no cache -> two prepares
+}
+
+TEST(ConnectionCache, OverlappingCursorsOnSameSqlOverflow) {
+    MockCliDriver driver;
+    driver.resultSets.push_back({{"id"}, {}});
+    driver.resultSets.push_back({{"id"}, {}});
+    auto conn = Connection::open(driver, ConnectionParams{"x"},
+                                 /*statementCacheSize=*/8)
+                    .value();
+
+    auto r1 = conn.query("SELECT id FROM t", 0);  // held open (busy)
+    ASSERT_TRUE(r1.ok());
+    auto r2 = conn.query("SELECT id FROM t", 0);  // same sql, still busy
+    ASSERT_TRUE(r2.ok());
+
+    EXPECT_EQ(driver.preparedSql.size(), 2u);  // second is a transient overflow
+}
+
+TEST(ConnectionCache, ExecuteErrorDropsEntry) {
+    MockCliDriver driver;
+    driver.executeErrors.push_back([] {
+        halcyon::Error e; e.code = halcyon::ErrorCode::Syntax; e.message = "boom";
+        return e;
+    }());
+    auto conn = Connection::open(driver, ConnectionParams{"x"},
+                                 /*statementCacheSize=*/8)
+                    .value();
+
+    auto bad = conn.execute("UPDATE t SET a = ? WHERE b = ?", 1, 2);
+    ASSERT_FALSE(bad.ok());                // first execute fails -> poisoned
+    auto ok = conn.execute("UPDATE t SET a = ? WHERE b = ?", 1, 2);
+    ASSERT_TRUE(ok.ok());                  // re-prepared after drop
+
+    EXPECT_EQ(driver.preparedSql.size(), 2u);
 }

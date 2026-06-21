@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <iterator>
+#include <memory>
 #include <optional>
 #include <string>
 #include <tuple>
@@ -10,7 +11,9 @@
 #include <vector>
 
 #include "halcyon/detail/cli/driver.hpp"
+#include "halcyon/detail/statement_cache.hpp"
 #include "halcyon/error.hpp"
+#include "halcyon/observability/metrics.hpp"
 #include "halcyon/parameters.hpp"
 #include "halcyon/result.hpp"
 #include "halcyon/types.hpp"
@@ -203,7 +206,7 @@ private:
     detail::cli::StatementHandle stmt_;
     std::size_t columns_;
     std::optional<Error> error_;      // set if a fetch failed mid-iteration
-    std::optional<Statement> owned_;  // present when the ResultSet owns its statement
+    std::optional<detail::StatementLease> lease_;  // owns the cached/transient stmt
 };
 
 // Out-of-line definition now that ResultSet is complete.
@@ -220,16 +223,25 @@ Result<ResultSet> Statement::execute_query(const Args&... args) {
 class Connection {
 public:
     static Result<Connection> open(detail::cli::ICliDriver& driver,
-                                   const detail::cli::ConnectionParams& params) {
+                                   const detail::cli::ConnectionParams& params,
+                                   std::size_t statementCacheSize = 0,
+                                   obs::MetricsSink* metrics = nullptr) {
         auto h = driver.connect(params);
         if (!h.ok()) return h.error();
-        return Connection(driver, h.value());
+        return Connection(driver, h.value(), statementCacheSize, metrics);
     }
 
-    Connection(detail::cli::ICliDriver& driver, detail::cli::ConnectionHandle handle)
-        : driver_(&driver), handle_(handle) {}
+    Connection(detail::cli::ICliDriver& driver,
+               detail::cli::ConnectionHandle handle,
+               std::size_t statementCacheSize = 0,
+               obs::MetricsSink* metrics = nullptr)
+        : driver_(&driver),
+          handle_(handle),
+          cache_(std::make_unique<detail::StatementCache>(
+              driver, handle, statementCacheSize, metrics)) {}
 
-    Connection(Connection&& o) noexcept : driver_(o.driver_), handle_(o.handle_) {
+    Connection(Connection&& o) noexcept
+        : driver_(o.driver_), handle_(o.handle_), cache_(std::move(o.cache_)) {
         o.handle_ = detail::cli::ConnectionHandle::invalid;
     }
     Connection& operator=(Connection&& o) noexcept {
@@ -237,6 +249,7 @@ public:
             reset();
             driver_ = o.driver_;
             handle_ = o.handle_;
+            cache_ = std::move(o.cache_);
             o.handle_ = detail::cli::ConnectionHandle::invalid;
         }
         return *this;
@@ -259,70 +272,74 @@ public:
     template <class... Args,
               std::enable_if_t<(is_bindable<Args>::value && ...), int> = 0>
     Result<ResultSet> query(const std::string& sql, const Args&... args) {
-        auto st = prepare(sql);
-        if (!st.ok()) return st.error();
-        return run_query(std::move(st.value()), detail::pack_params(args...));
+        auto lease = cache_->acquire(sql);
+        if (!lease.ok()) return lease.error();
+        return run_query(std::move(lease.value()), detail::pack_params(args...));
     }
 
     template <class... Args,
               std::enable_if_t<(is_bindable<Args>::value && ...), int> = 0>
     Result<std::int64_t> execute(const std::string& sql, const Args&... args) {
-        auto st = prepare(sql);
-        if (!st.ok()) return st.error();
-        return st.value().execute_update(args...);
+        auto lease = cache_->acquire(sql);
+        if (!lease.ok()) return lease.error();
+        return exec_lease(lease.value(), detail::pack_params(args...));
     }
 
     // --- named-parameter overloads ---
     Result<ResultSet> query(const std::string& sql, const params& named) {
         auto pre = detail::bind_named(sql, named);
         if (!pre.ok()) return pre.error();
-        auto st = prepare(pre.value().sql);
-        if (!st.ok()) return st.error();
-        return run_query(std::move(st.value()), pre.value().params);
+        auto lease = cache_->acquire(pre.value().sql);
+        if (!lease.ok()) return lease.error();
+        return run_query(std::move(lease.value()), pre.value().params);
     }
 
     Result<std::int64_t> execute(const std::string& sql, const params& named) {
         auto pre = detail::bind_named(sql, named);
         if (!pre.ok()) return pre.error();
-        auto st = prepare(pre.value().sql);
-        if (!st.ok()) return st.error();
-        auto b = driver_->bindParams(st.value().handle(), pre.value().params);
-        if (!b.ok()) return b.error();
-        return driver_->execute(st.value().handle());
+        auto lease = cache_->acquire(pre.value().sql);
+        if (!lease.ok()) return lease.error();
+        return exec_lease(lease.value(), pre.value().params);
     }
 
     // --- struct-mapping overloads (require HALCYON_REFLECT(T, ...)) ---
     template <class T, class... Args,
               std::enable_if_t<(is_bindable<Args>::value && ...), int> = 0>
     Result<std::vector<T>> queryAs(const std::string& sql, const Args&... args) {
-        auto st = prepare(sql);
-        if (!st.ok()) return st.error();
-        return collect<T>(st.value(), detail::pack_params(args...));
+        auto lease = cache_->acquire(sql);
+        if (!lease.ok()) return lease.error();
+        return collect<T>(lease.value(), detail::pack_params(args...));
     }
 
     template <class T>
     Result<std::vector<T>> queryAs(const std::string& sql, const params& named) {
         auto pre = detail::bind_named(sql, named);
         if (!pre.ok()) return pre.error();
-        auto st = prepare(pre.value().sql);
-        if (!st.ok()) return st.error();
-        return collect<T>(st.value(), pre.value().params);
+        auto lease = cache_->acquire(pre.value().sql);
+        if (!lease.ok()) return lease.error();
+        return collect<T>(lease.value(), pre.value().params);
     }
 
-    // Prepares sql once and executes it for each row of positional params,
-    // accumulating affected-row counts. Stops at the first error.
+    // Prepares sql once (cached) and executes it for each row of positional
+    // params, accumulating affected-row counts. Stops at the first error.
     Result<std::int64_t> executeBatch(
         const std::string& sql,
         const std::vector<std::vector<detail::cli::Value>>& rows) {
         if (rows.empty()) return std::int64_t{0};
-        auto st = prepare(sql);
-        if (!st.ok()) return st.error();
+        auto lease = cache_->acquire(sql);
+        if (!lease.ok()) return lease.error();
         std::int64_t total = 0;
         for (const auto& row : rows) {
-            auto b = driver_->bindParams(st.value().handle(), row);
-            if (!b.ok()) return b.error();
-            auto e = driver_->execute(st.value().handle());
-            if (!e.ok()) return e.error();
+            auto b = driver_->bindParams(lease.value().handle(), row);
+            if (!b.ok()) {
+                lease.value().poison();
+                return b.error();
+            }
+            auto e = driver_->execute(lease.value().handle());
+            if (!e.ok()) {
+                lease.value().poison();
+                return e.error();
+            }
             total += e.value();
         }
         return total;
@@ -332,42 +349,89 @@ public:
     Result<Transaction> begin();
 
 private:
+    Result<std::int64_t> exec_lease(
+        detail::StatementLease& lease,
+        const std::vector<detail::cli::Value>& params) {
+        auto b = driver_->bindParams(lease.handle(), params);
+        if (!b.ok()) {
+            lease.poison();
+            return b.error();
+        }
+        auto e = driver_->execute(lease.handle());
+        if (!e.ok()) {
+            lease.poison();
+            return e.error();
+        }
+        return e.value();
+    }
+
     template <class T>
-    Result<std::vector<T>> collect(Statement& st,
-                                   const std::vector<detail::cli::Value>& params) {
-        auto b = driver_->bindParams(st.handle(), params);
-        if (!b.ok()) return b.error();
-        auto e = driver_->execute(st.handle());
-        if (!e.ok()) return e.error();
-        auto cc = driver_->columnCount(st.handle());
-        if (!cc.ok()) return cc.error();
+    Result<std::vector<T>> collect(
+        detail::StatementLease& lease,
+        const std::vector<detail::cli::Value>& params) {
+        auto b = driver_->bindParams(lease.handle(), params);
+        if (!b.ok()) {
+            lease.poison();
+            return b.error();
+        }
+        auto e = driver_->execute(lease.handle());
+        if (!e.ok()) {
+            lease.poison();
+            return e.error();
+        }
+        auto cc = driver_->columnCount(lease.handle());
+        if (!cc.ok()) {
+            lease.poison();
+            return cc.error();
+        }
         std::vector<T> out;
         for (;;) {
-            auto f = driver_->fetch(st.handle());
-            if (!f.ok()) return f.error();
+            auto f = driver_->fetch(lease.handle());
+            if (!f.ok()) {
+                lease.poison();
+                return f.error();
+            }
             if (!f.value()) break;
-            auto row = reflect::map_row<T>(*driver_, st.handle(), cc.value());
-            if (!row.ok()) return row.error();
+            auto row = reflect::map_row<T>(*driver_, lease.handle(), cc.value());
+            if (!row.ok()) {
+                lease.poison();
+                return row.error();
+            }
             out.push_back(std::move(row.value()));
         }
         return out;
     }
 
-    // Builds a ResultSet that OWNS the statement (kept alive for the cursor).
-    Result<ResultSet> run_query(Statement&& st,
+    // Builds a ResultSet that OWNS the lease (kept alive for the cursor's life;
+    // the lease closes the cursor and returns the statement to the cache on
+    // destruction).
+    Result<ResultSet> run_query(detail::StatementLease&& lease,
                                 const std::vector<detail::cli::Value>& params) {
-        auto b = driver_->bindParams(st.handle(), params);
-        if (!b.ok()) return b.error();
-        auto e = driver_->execute(st.handle());
-        if (!e.ok()) return e.error();
-        auto cc = driver_->columnCount(st.handle());
-        if (!cc.ok()) return cc.error();
-        ResultSet rs(driver_, st.handle(), cc.value());
-        rs.owned_ = std::move(st);
+        auto b = driver_->bindParams(lease.handle(), params);
+        if (!b.ok()) {
+            lease.poison();
+            return b.error();
+        }
+        auto e = driver_->execute(lease.handle());
+        if (!e.ok()) {
+            lease.poison();
+            return e.error();
+        }
+        auto cc = driver_->columnCount(lease.handle());
+        if (!cc.ok()) {
+            lease.poison();
+            return cc.error();
+        }
+        ResultSet rs(driver_, lease.handle(), cc.value());
+        rs.lease_ = std::move(lease);
         return rs;
     }
 
     void reset() {
+        // Finalize cached statement handles BEFORE dropping the connection: the
+        // driver's disconnect frees the connection handle, after which the
+        // cache's statement handles would be invalid to finalize.
+        cache_.reset();
         if (driver_ && handle_ != detail::cli::ConnectionHandle::invalid) {
             driver_->disconnect(handle_);
             handle_ = detail::cli::ConnectionHandle::invalid;
@@ -375,6 +439,7 @@ private:
     }
     detail::cli::ICliDriver* driver_;
     detail::cli::ConnectionHandle handle_;
+    std::unique_ptr<detail::StatementCache> cache_;
 };
 
 }  // namespace halcyon
