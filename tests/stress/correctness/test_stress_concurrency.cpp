@@ -224,3 +224,49 @@ TEST(StressScenario, TransactionChurnCommitsAndRollbacksBalance) {
     EXPECT_EQ(fake->autoCommitOn.load(), txns);           // each tx restores it
     EXPECT_EQ(db.value().pool().active_count(), 0u);      // no tx leaks a connection
 }
+
+#include <future>
+#include <vector>
+
+// Scenario 6 reuses make_pool_contention (already in scope) under reaper pressure.
+
+TEST(StressScenario, ReaperRacesAcquireReleaseSafely) {
+    auto fake = std::make_shared<ConcurrentFakeDriver>();
+    // Lifecycle config: maintenance thread on, tiny intervals so the reaper fires
+    // constantly while acquires/releases race it.
+    auto db = Database::open(fake, "dsn", config_for(ScenarioId::Lifecycle, 6));
+    ASSERT_TRUE(db.ok()) << db.error().message;
+
+    Workload w = make_pool_contention(db.value());  // acquire/query/release loop
+    RunConfig cfg;
+    cfg.threads = 16;
+    cfg.stop.duration = std::chrono::milliseconds(300);  // let the reaper churn
+    RunReport r = run_workload(w, cfg);
+
+    EXPECT_FALSE(r.failed) << r.first_error;
+    EXPECT_LE(fake->peakInFlight.load(), 6);             // reaper never reaps a lease
+    EXPECT_EQ(db.value().pool().active_count(), 0u);
+    EXPECT_GE(db.value().pool().total_count(),
+              db.value().pool().idle_count());           // accounting consistent
+}
+
+TEST(StressScenario, DestroyDatabaseWithInflightAsyncWork) {
+    auto fake = std::make_shared<ConcurrentFakeDriver>();
+    fake->queryLatencyUs = 200;  // make async work linger so it's truly in flight
+    std::vector<std::future<halcyon::Result<std::vector<halcyon::stress::One>>>> futs;
+    {
+        auto db = Database::open(fake, "dsn", config_for(ScenarioId::Executor, 4));
+        ASSERT_TRUE(db.ok()) << db.error().message;
+        for (int i = 0; i < 200; ++i)
+            futs.push_back(db.value().queryAsync<halcyon::stress::One>(
+                halcyon::stress::select_n(7)));
+        // db (and its shared executor/pool) go out of scope here with futures live;
+        // the shared executor drains in-flight tasks before teardown completes.
+    }
+    for (auto& f : futs) {
+        auto r = f.get();
+        ASSERT_TRUE(r.ok()) << r.error().message;
+        ASSERT_EQ(r.value().size(), 1u);
+        EXPECT_EQ(r.value()[0].v, 7);
+    }
+}
