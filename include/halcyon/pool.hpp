@@ -34,6 +34,7 @@ struct PoolConfig {
     std::chrono::milliseconds maintenanceInterval{1000};
     bool startMaintenanceThread = true;
     obs::ObservabilityConfig observability{};      // default-null = no-op
+    std::size_t statementCacheSize = 64;  // per-connection prepared-stmt LRU; 0 disables
 };
 
 namespace detail {
@@ -294,7 +295,9 @@ private:
                                  ? 1
                                  : config_.backoff.maxAttempts;
         for (int attempt = 1; attempt <= attempts; ++attempt) {
-            auto c = Connection::open(*driver_, params_);
+            auto c = Connection::open(*driver_, params_,
+                                      config_.statementCacheSize,
+                                      has_metrics_ ? metrics_ : nullptr);
             if (c.ok())
                 return std::make_unique<Connection>(std::move(c.value()));
             last = c.error();

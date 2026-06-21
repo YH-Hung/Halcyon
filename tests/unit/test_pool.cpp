@@ -183,3 +183,57 @@ TEST(PoolReconnect, ReturnsErrorWhenAllAttemptsFail) {
     ASSERT_FALSE(pool.ok());
     EXPECT_EQ(pool.error().code, ErrorCode::Connection);
 }
+
+TEST(PoolStatementCache, ReusesPreparedStatementAcrossAcquires) {
+    halcyon::testing::MockCliDriver driver;
+    driver.resultSets.push_back({{"id"}, {}});
+    driver.resultSets.push_back({{"id"}, {}});
+    halcyon::PoolConfig cfg;
+    cfg.min = 1;
+    cfg.max = 1;                       // single physical connection, reused
+    cfg.startMaintenanceThread = false;
+    cfg.statementCacheSize = 8;
+    auto pool =
+        halcyon::ConnectionPool::create(driver, {"dsn"}, cfg).value();
+
+    {
+        auto lease = pool->acquire().value();
+        auto r = lease->query("SELECT id FROM t", 1);
+        ASSERT_TRUE(r.ok());
+    }  // returned to pool; cache warm
+    {
+        auto lease = pool->acquire().value();
+        auto r = lease->query("SELECT id FROM t", 1);
+        ASSERT_TRUE(r.ok());
+    }
+
+    EXPECT_EQ(driver.preparedSql.size(), 1u);  // same connection -> reuse
+}
+
+TEST(PoolStatementCache, ReconnectStartsWithFreshCache) {
+    halcyon::testing::MockCliDriver driver;
+    driver.resultSets.push_back({{"id"}, {}});
+    driver.resultSets.push_back({{"id"}, {}});
+    halcyon::PoolConfig cfg;
+    cfg.min = 1;
+    cfg.max = 1;
+    cfg.startMaintenanceThread = false;
+    cfg.validateOnAcquire = true;       // validate (isAlive) on each acquire
+    cfg.statementCacheSize = 8;
+    auto pool =
+        halcyon::ConnectionPool::create(driver, {"dsn"}, cfg).value();
+
+    {
+        auto lease = pool->acquire().value();
+        auto r = lease->query("SELECT id FROM t", 1);  // prepare #1
+        ASSERT_TRUE(r.ok());
+    }
+    driver.aliveResults.push_back(false);  // next acquire sees a dead connection
+    {
+        auto lease = pool->acquire().value();             // reconnect -> new Connection
+        auto r = lease->query("SELECT id FROM t", 1);     // prepare #2 (fresh cache)
+        ASSERT_TRUE(r.ok());
+    }
+
+    EXPECT_EQ(driver.preparedSql.size(), 2u);  // cache did not survive reconnect
+}
