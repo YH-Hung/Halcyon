@@ -157,4 +157,33 @@ inline Workload make_reconnect_faults(Database& db,
     }};
 }
 
+// --- Scenario 5: transaction churn (facade transaction(); commit + rollback) ---
+// Half the ops commit (lambda returns ok) and half roll back (lambda returns an
+// error Result), exercising ScopedTransaction's commit/rollback + lease-return.
+inline Workload make_txn_churn(Database& db) {
+    return Workload{"txn", [&db](WorkerCtx& ctx) {
+        const bool do_commit = (ctx.rng() & 1u) == 0u;
+        auto r = db.transaction(
+            [&](Transaction& tx) -> Result<std::int64_t> {
+                auto q = tx.queryAs<One>(select_n(7));
+                if (!q.ok()) return q.error();
+                if (q.value().size() != 1 || q.value()[0].v != 7) {
+                    Error e;
+                    e.code = ErrorCode::Mapping;
+                    e.message = "wrong scalar in tx";
+                    return e;
+                }
+                if (do_commit) return std::int64_t{1};
+                Error e;          // force a rollback path
+                e.code = ErrorCode::Unknown;
+                e.message = "intentional rollback";
+                return e;
+            });
+        // A committed tx returns ok; a rolled-back tx returns our forced error.
+        // A Mapping error means the in-tx read was wrong -> real failure.
+        if (!r.ok() && r.error().code == ErrorCode::Mapping)
+            ctx.fail("in-transaction read returned wrong scalar");
+    }};
+}
+
 }  // namespace halcyon::stress

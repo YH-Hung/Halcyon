@@ -203,3 +203,24 @@ TEST(StressScenario, ReconnectAndRetryRecoverUnderFaults) {
               static_cast<long>(r.ops) * 9 / 10);       // vast majority recovered
     EXPECT_EQ(db.value().pool().active_count(), 0u);    // no leaked leases
 }
+
+using halcyon::stress::make_txn_churn;
+
+TEST(StressScenario, TransactionChurnCommitsAndRollbacksBalance) {
+    auto fake = std::make_shared<ConcurrentFakeDriver>();
+    auto db = Database::open(fake, "dsn", config_for(ScenarioId::Txn, 6));
+    ASSERT_TRUE(db.ok()) << db.error().message;
+
+    Workload w = make_txn_churn(db.value());
+    RunConfig cfg;
+    cfg.threads = 8;
+    cfg.stop.total_iters = 16000;
+    RunReport r = run_workload(w, cfg);
+
+    EXPECT_FALSE(r.failed) << r.first_error;
+    const long txns = fake->autoCommitOff.load();         // each begin() flips off
+    EXPECT_EQ(txns, 16000);
+    EXPECT_EQ(fake->commitCalls.load() + fake->rollbackCalls.load(), txns);
+    EXPECT_EQ(fake->autoCommitOn.load(), txns);           // each tx restores it
+    EXPECT_EQ(db.value().pool().active_count(), 0u);      // no tx leaks a connection
+}
