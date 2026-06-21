@@ -1,6 +1,6 @@
 # Halcyon Core Data Path Implementation Plan (Plan 2)
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Build the portable, mockable core data path on top of the Plan 1 seam:
 extend `ICliDriver` to carry a neutral boundary `Value`, add the `TypeBinder<T>`
@@ -97,7 +97,7 @@ and `detail::from_value<T>(const Value&)`; `detail::mapping_error(std::string)`.
 - Modify: `tests/unit/mock_cli_driver.hpp`
 - Modify: `tests/unit/test_cli_seam.cpp`
 
-- [ ] **Step 1: Write the failing seam tests**
+- [x] **Step 1: Write the failing seam tests**
 
 Append to `tests/unit/test_cli_seam.cpp` (keep the existing four tests):
 
@@ -163,7 +163,7 @@ TEST(CliSeamStatement, PrepareErrorIsScriptable) {
 }
 ```
 
-- [ ] **Step 2: Extend the seam header**
+- [x] **Step 2: Extend the seam header**
 
 Edit `include/halcyon/detail/cli/driver.hpp`. Add includes and, after
 `ConnectionParams`, the boundary value + statement surface:
@@ -247,7 +247,7 @@ public:
 }  // namespace halcyon::detail::cli
 ```
 
-- [ ] **Step 3: Rewrite the mock as a scriptable statement engine**
+- [x] **Step 3: Rewrite the mock as a scriptable statement engine**
 
 Replace the body of `tests/unit/mock_cli_driver.hpp` (keep the existing
 connect/disconnect/isAlive scripting fields and behavior):
@@ -425,7 +425,7 @@ private:
 }  // namespace halcyon::testing
 ```
 
-- [ ] **Step 4: Build and run to verify pass**
+- [x] **Step 4: Build and run to verify pass**
 
 ```bash
 cmake --build build -j
@@ -436,7 +436,7 @@ Expected: original `CliSeam.*` tests still PASS and the three new
 `CliSeamStatement.*` tests PASS. (No `tests/CMakeLists.txt` change needed —
 `test_cli_seam.cpp` is already registered.)
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add include/halcyon/detail/cli/driver.hpp tests/unit/mock_cli_driver.hpp \
@@ -453,7 +453,7 @@ git commit -m "feat: extend CLI seam with boundary Value and statement operation
 - Modify: `tests/CMakeLists.txt` (add `unit/test_type_binder.cpp`)
 - Test: `tests/unit/test_type_binder.cpp`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `tests/unit/test_type_binder.cpp`:
 
@@ -536,13 +536,13 @@ TEST(TypeBinder, Traits) {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Add `unit/test_type_binder.cpp` to `tests/CMakeLists.txt` (Step 4 below shows the
 final list), reconfigure, build. Expected: compile FAIL — `halcyon/types.hpp`
 not found.
 
-- [ ] **Step 3: Write the types header**
+- [x] **Step 3: Write the types header**
 
 Create `include/halcyon/types.hpp`:
 
@@ -734,7 +734,7 @@ Result<std::decay_t<T>> from_value(const detail::cli::Value& v) {
 }  // namespace halcyon
 ```
 
-- [ ] **Step 4: Wire into the build**
+- [x] **Step 4: Wire into the build**
 
 In `tests/CMakeLists.txt`, extend the test sources:
 
@@ -747,7 +747,7 @@ add_executable(halcyon_unit_tests
     unit/test_type_binder.cpp)
 ```
 
-- [ ] **Step 5: Build and run to verify pass**
+- [x] **Step 5: Build and run to verify pass**
 
 ```bash
 cmake --build build -j
@@ -756,7 +756,7 @@ ctest --test-dir build -R TypeBinder --output-on-failure
 
 Expected: all `TypeBinder.*` tests PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add include/halcyon/types.hpp tests/CMakeLists.txt tests/unit/test_type_binder.cpp
@@ -772,7 +772,7 @@ git commit -m "feat: add TypeBinder<T> mapping layer with nullability and traits
 - Modify: `tests/CMakeLists.txt` (add `unit/test_parameters.cpp`)
 - Test: `tests/unit/test_parameters.cpp`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `tests/unit/test_parameters.cpp`:
 
@@ -835,12 +835,12 @@ TEST(Parameters, DoubleColonIsLeftLiteral) {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Add `unit/test_parameters.cpp` to `tests/CMakeLists.txt`, reconfigure, build.
 Expected: compile FAIL — `halcyon/parameters.hpp` not found.
 
-- [ ] **Step 3: Write the parameters header**
+- [x] **Step 3: Write the parameters header**
 
 Create `include/halcyon/parameters.hpp`:
 
@@ -945,11 +945,11 @@ inline Result<PreparedSql> bind_named(const std::string& sql, const params& p) {
 }  // namespace halcyon
 ```
 
-- [ ] **Step 4: Wire into the build**
+- [x] **Step 4: Wire into the build**
 
 Add `unit/test_parameters.cpp` to `halcyon_unit_tests` in `tests/CMakeLists.txt`.
 
-- [ ] **Step 5: Build and run to verify pass**
+- [x] **Step 5: Build and run to verify pass**
 
 ```bash
 cmake --build build -j
@@ -958,7 +958,7 @@ ctest --test-dir build -R Parameters --output-on-failure
 
 Expected: all `Parameters.*` tests PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add include/halcyon/parameters.hpp tests/CMakeLists.txt tests/unit/test_parameters.cpp
@@ -977,7 +977,7 @@ and `Connection` follow in Task 5 (same header, appended).
 - Modify: `tests/CMakeLists.txt` (add `unit/test_result_set.cpp`)
 - Test: `tests/unit/test_result_set.cpp`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `tests/unit/test_result_set.cpp`:
 
@@ -1057,12 +1057,12 @@ TEST(ResultSetTest, AsThrowsMappingExceptionOnNullIntoNonOptional) {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Add `unit/test_result_set.cpp` to `tests/CMakeLists.txt`, reconfigure, build.
 Expected: compile FAIL — `halcyon/connection.hpp` not found.
 
-- [ ] **Step 3: Write `connection.hpp` (Row + ResultSet)**
+- [x] **Step 3: Write `connection.hpp` (Row + ResultSet)**
 
 Create `include/halcyon/connection.hpp`:
 
@@ -1229,7 +1229,7 @@ private:
 > dereferenced). If a linker complains, replace the `Row row_;` member with
 > `std::optional<Row>` and adjust `operator*`/`advance()` accordingly.
 
-- [ ] **Step 4: Adopt the `std::optional<Row>` iterator (robust variant)**
+- [x] **Step 4: Adopt the `std::optional<Row>` iterator (robust variant)**
 
 To avoid the undefined `dummy_driver()` entirely, implement the iterator member
 as `std::optional<Row>`:
@@ -1267,11 +1267,11 @@ as `std::optional<Row>`:
 Use this version (delete the `make_invalid_row()`/`dummy_driver()` version from
 Step 3). The Step-3 listing documents the design; this is the code to keep.
 
-- [ ] **Step 5: Wire into the build**
+- [x] **Step 5: Wire into the build**
 
 Add `unit/test_result_set.cpp` to `halcyon_unit_tests` in `tests/CMakeLists.txt`.
 
-- [ ] **Step 6: Build and run to verify pass**
+- [x] **Step 6: Build and run to verify pass**
 
 ```bash
 cmake --build build -j
@@ -1280,7 +1280,7 @@ ctest --test-dir build -R ResultSetTest --output-on-failure
 
 Expected: all `ResultSetTest.*` tests PASS.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add include/halcyon/connection.hpp tests/CMakeLists.txt tests/unit/test_result_set.cpp
@@ -1296,7 +1296,7 @@ git commit -m "feat: add Row and forward-only ResultSet with tuple mapping"
 - Modify: `tests/CMakeLists.txt` (add `unit/test_connection.cpp`)
 - Test: `tests/unit/test_connection.cpp`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `tests/unit/test_connection.cpp`:
 
@@ -1382,12 +1382,12 @@ TEST(ConnectionTest, PreparedStatementIsReusable) {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Add `unit/test_connection.cpp` to `tests/CMakeLists.txt`, reconfigure, build.
 Expected: compile FAIL — `Statement`/`Connection` undefined.
 
-- [ ] **Step 3: Append `Statement` and `Connection` to `connection.hpp`**
+- [x] **Step 3: Append `Statement` and `Connection` to `connection.hpp`**
 
 Insert these classes inside `namespace halcyon` in
 `include/halcyon/connection.hpp`, *before* the closing brace (after `ResultSet`):
@@ -1550,7 +1550,7 @@ private:
 };
 ```
 
-- [ ] **Step 4: Give `ResultSet` optional ownership of a `Statement`**
+- [x] **Step 4: Give `ResultSet` optional ownership of a `Statement`**
 
 `run_query` sets `rs.owned_`, so `ResultSet` needs that member. In `connection.hpp`,
 because `Statement` is defined *after* `ResultSet`, move `Statement`'s definition
@@ -1617,11 +1617,11 @@ class Connection { /* as above */ };
 }  // namespace halcyon
 ```
 
-- [ ] **Step 5: Wire into the build**
+- [x] **Step 5: Wire into the build**
 
 Add `unit/test_connection.cpp` to `halcyon_unit_tests` in `tests/CMakeLists.txt`.
 
-- [ ] **Step 6: Build and run to verify pass**
+- [x] **Step 6: Build and run to verify pass**
 
 ```bash
 cmake --build build -j
@@ -1630,7 +1630,7 @@ ctest --test-dir build -R ConnectionTest --output-on-failure
 
 Expected: all `ConnectionTest.*` tests PASS.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add include/halcyon/connection.hpp tests/CMakeLists.txt tests/unit/test_connection.cpp
@@ -1647,7 +1647,7 @@ git commit -m "feat: add Connection and reusable Statement query/execute over th
 - Modify: `tests/CMakeLists.txt` (add `unit/test_reflect.cpp`)
 - Test: `tests/unit/test_reflect.cpp`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `tests/unit/test_reflect.cpp`:
 
@@ -1711,12 +1711,12 @@ TEST(Reflect, QueryAsArityMismatchIsMappingError) {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Add `unit/test_reflect.cpp` to `tests/CMakeLists.txt`, reconfigure, build.
 Expected: compile FAIL — `HALCYON_REFLECT`/`queryAs` undefined.
 
-- [ ] **Step 3: Add reflection machinery to `types.hpp`**
+- [x] **Step 3: Add reflection machinery to `types.hpp`**
 
 Append to `include/halcyon/types.hpp`, inside `namespace halcyon` add a
 `reflect` namespace, then define the macros at global scope (outside any
@@ -1816,7 +1816,7 @@ Result<T> map_row(detail::cli::ICliDriver& driver,
 > `Reflected<T>::value` is `true` for reflected types and `false` otherwise. Add
 > `#include <tuple>` to `types.hpp` (for `std::make_tuple`/`std::get`).
 
-- [ ] **Step 4: Add `Connection::queryAs<T>`**
+- [x] **Step 4: Add `Connection::queryAs<T>`**
 
 In `include/halcyon/connection.hpp`, add to `Connection` (anonymous + named):
 
@@ -1864,11 +1864,11 @@ private:
 (Place the existing `private:` section accordingly — there should be a single
 `private:` block; merge `collect` and `run_query`/`reset`/members.)
 
-- [ ] **Step 5: Wire into the build**
+- [x] **Step 5: Wire into the build**
 
 Add `unit/test_reflect.cpp` to `halcyon_unit_tests` in `tests/CMakeLists.txt`.
 
-- [ ] **Step 6: Build and run to verify pass**
+- [x] **Step 6: Build and run to verify pass**
 
 ```bash
 cmake --build build -j
@@ -1877,7 +1877,7 @@ ctest --test-dir build -R Reflect --output-on-failure
 
 Expected: all `Reflect.*` tests PASS.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add include/halcyon/types.hpp include/halcyon/connection.hpp \
@@ -1899,7 +1899,7 @@ without a live DB; it is extracted so Task 8 just calls it.
 - Modify: `tests/CMakeLists.txt` (add `unit/test_sqlstate.cpp`)
 - Test: `tests/unit/test_sqlstate.cpp`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `tests/unit/test_sqlstate.cpp`:
 
@@ -1944,7 +1944,7 @@ TEST(SqlState, UnknownDefault) {
 }
 ```
 
-- [ ] **Step 2: Write the classification header**
+- [x] **Step 2: Write the classification header**
 
 Create `include/halcyon/detail/cli/sqlstate.hpp`:
 
@@ -1968,7 +1968,7 @@ Classification classify_sqlstate(std::string_view sqlstate, int nativeError) noe
 }  // namespace halcyon::detail::cli
 ```
 
-- [ ] **Step 3: Write the classification source**
+- [x] **Step 3: Write the classification source**
 
 Create `src/detail/cli/sqlstate.cpp`:
 
@@ -2001,7 +2001,7 @@ Classification classify_sqlstate(std::string_view sqlstate,
 }  // namespace halcyon::detail::cli
 ```
 
-- [ ] **Step 4: Wire into the build**
+- [x] **Step 4: Wire into the build**
 
 In `CMakeLists.txt`, add the source to the library target:
 
@@ -2014,7 +2014,7 @@ add_library(halcyon
 
 Add `unit/test_sqlstate.cpp` to `halcyon_unit_tests` in `tests/CMakeLists.txt`.
 
-- [ ] **Step 5: Build and run to verify pass**
+- [x] **Step 5: Build and run to verify pass**
 
 ```bash
 cmake -S . -B build -DHALCYON_BUILD_TESTS=ON
@@ -2024,7 +2024,7 @@ ctest --test-dir build -R SqlState --output-on-failure
 
 Expected: all `SqlState.*` tests PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add include/halcyon/detail/cli/sqlstate.hpp src/detail/cli/sqlstate.cpp \
@@ -2045,7 +2045,7 @@ integration tests; there is no live-DB unit test here.
 - Create: `src/detail/cli/db2_cli_driver.cpp`
 - Modify: `CMakeLists.txt` (add source, link `DB2::CLI`, bake RPATH)
 
-- [ ] **Step 1: Write the factory header (portable)**
+- [x] **Step 1: Write the factory header (portable)**
 
 Create `include/halcyon/detail/cli/db2_cli_driver.hpp`:
 
@@ -2065,7 +2065,7 @@ std::unique_ptr<ICliDriver> make_db2_cli_driver();
 }  // namespace halcyon::detail::cli
 ```
 
-- [ ] **Step 2: Write the driver implementation**
+- [x] **Step 2: Write the driver implementation**
 
 Create `src/detail/cli/db2_cli_driver.cpp`. Includes both `sqlcli1.h` (core +
 `SQLSetConnectAttr`) and `sqlext.h` (`SQLDriverConnect`, `SQLBindParameter`). Do
@@ -2415,7 +2415,7 @@ std::unique_ptr<ICliDriver> make_db2_cli_driver() {
 > Treat `get_string` truncation handling and `BoundParam` lifetimes as the most
 > likely spots to adjust when first running against a server.
 
-- [ ] **Step 3: Wire the driver into the library and link `DB2::CLI`**
+- [x] **Step 3: Wire the driver into the library and link `DB2::CLI`**
 
 In `CMakeLists.txt`, add the source and link the imported target (and bake the
 RPATH per the spec so examples/tests find `libdb2` without `*_LIBRARY_PATH`):
@@ -2438,7 +2438,7 @@ if(DB2CLI_LIBRARY_DIR)
 endif()
 ```
 
-- [ ] **Step 4: Build to verify it compiles and links**
+- [x] **Step 4: Build to verify it compiles and links**
 
 ```bash
 cmake -S . -B build -DHALCYON_BUILD_TESTS=ON
@@ -2453,7 +2453,7 @@ driver is not invoked):
 ctest --test-dir build --output-on-failure
 ```
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add include/halcyon/detail/cli/db2_cli_driver.hpp \
@@ -2473,7 +2473,7 @@ git commit -m "feat: implement real Db2CliDriver over sqlcli1.h and link DB2::CL
 - Modify: `CMakeLists.txt` (add `HALCYON_BUILD_INTEGRATION_TESTS` option)
 - Modify: `tests/CMakeLists.txt` (add the integration subdir when enabled)
 
-- [ ] **Step 1: Write the umbrella header**
+- [x] **Step 1: Write the umbrella header**
 
 Create `include/halcyon/halcyon.hpp`:
 
@@ -2490,7 +2490,7 @@ Create `include/halcyon/halcyon.hpp`:
 #include "halcyon/detail/cli/db2_cli_driver.hpp"
 ```
 
-- [ ] **Step 2: Write the Docker compose for Db2**
+- [x] **Step 2: Write the Docker compose for Db2**
 
 Create `docker/docker-compose.yml`:
 
@@ -2513,7 +2513,7 @@ services:
       retries: 30
 ```
 
-- [ ] **Step 3: Write the integration test**
+- [x] **Step 3: Write the integration test**
 
 Create `tests/integration/test_db2_roundtrip.cpp`. It is skipped (passes trivially)
 unless `HALCYON_TEST_DSN` is set, so the target can be built everywhere but only
@@ -2601,7 +2601,7 @@ TEST_F(Db2Integration, TupleIterationAndAnonymousParams) {
 }
 ```
 
-- [ ] **Step 4: Write the integration CMake**
+- [x] **Step 4: Write the integration CMake**
 
 Create `tests/integration/CMakeLists.txt`:
 
@@ -2617,7 +2617,7 @@ gtest_discover_tests(halcyon_integration_tests
     PROPERTIES LABELS integration)
 ```
 
-- [ ] **Step 5: Wire the option and subdir**
+- [x] **Step 5: Wire the option and subdir**
 
 In `CMakeLists.txt`, add the option near the others:
 
@@ -2633,7 +2633,7 @@ if(HALCYON_BUILD_INTEGRATION_TESTS)
 endif()
 ```
 
-- [ ] **Step 6: Build the integration target (no DB required to compile)**
+- [x] **Step 6: Build the integration target (no DB required to compile)**
 
 ```bash
 cmake -S . -B build -DHALCYON_BUILD_TESTS=ON -DHALCYON_BUILD_INTEGRATION_TESTS=ON
@@ -2643,7 +2643,7 @@ ctest --test-dir build -L integration --output-on-failure
 
 Expected without a DB: tests are reported as **skipped** (no `HALCYON_TEST_DSN`).
 
-- [ ] **Step 7: Run the integration suite against live Db2 (optional, gated)**
+- [x] **Step 7: Run the integration suite against live Db2 (optional, gated)**
 
 ```bash
 docker compose -f docker/docker-compose.yml up -d
@@ -2655,7 +2655,7 @@ docker compose -f docker/docker-compose.yml down
 
 Expected: `Db2Integration.*` PASS against the live database.
 
-- [ ] **Step 8: Run the full unit suite**
+- [x] **Step 8: Run the full unit suite**
 
 ```bash
 ctest --test-dir build --output-on-failure
@@ -2663,7 +2663,7 @@ ctest --test-dir build --output-on-failure
 
 Expected: every unit test from Plans 1–2 PASSES.
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```bash
 git add include/halcyon/halcyon.hpp docker/docker-compose.yml \

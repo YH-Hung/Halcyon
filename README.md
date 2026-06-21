@@ -119,12 +119,39 @@ docker compose -f docker/docker-compose.yml down
 **Apple `container` (Docker alternative on macOS):** see
 [`docker/README.md`](docker/README.md#apple-container-docker-alternative-on-macos).
 
+### Concurrency stress & performance suite (opt-in)
+
+Build with `-DHALCYON_BUILD_STRESS_TESTS=ON`. There are two front-ends:
+
+- **`halcyon_stress_tests`** — GoogleTest correctness suite (CTest label `stress`). Runs against an in-process `ConcurrentFakeDriver` (no DB). Build under a sanitizer to prove race/deadlock freedom.
+- **`halcyon_stress`** — standalone perf harness. Reports throughput, p50/p95/p99/max latency, op count, tolerated-error count, reconnects, and cache hit-rate for each scenario.
+
+```bash
+# Build under ThreadSanitizer
+cmake -S . -B build -DHALCYON_BUILD_TESTS=ON \
+      -DHALCYON_BUILD_STRESS_TESTS=ON -DHALCYON_SANITIZER=thread
+cmake --build build -j
+
+# Correctness suite
+ctest --test-dir build -L stress --output-on-failure
+
+# Performance — fake backend, scaling sweep
+./build/tests/stress/halcyon_stress --scenario=all --threads=1,2,4,8,16
+
+# CSV output (gates on stderr; stdout is pure CSV)
+./build/tests/stress/halcyon_stress --format=csv --strict > sweep.csv
+```
+
+`--scenario` accepts a comma list (e.g. `pool,executor,cache,txn`) or `all`. `--duration` and `--warmup` are in milliseconds; `--latency` is the fake's per-call latency in microseconds. The three soft gates (scaling, latency, no-starvation) are reported as `PASS`/`WARN` and only affect the exit code under `--strict`. See [`tests/stress/README.md`](tests/stress/README.md) for full details.
+
 ### CMake options
 
 | Option | Default | Description |
 |---|---|---|
 | `HALCYON_BUILD_TESTS` | `ON` | Build the unit tests |
 | `HALCYON_BUILD_INTEGRATION_TESTS` | `OFF` | Build the Dockerized Db2 integration tests (run only when `HALCYON_TEST_DSN` is set) |
+| `HALCYON_BUILD_STRESS_TESTS` | `OFF` | Build the concurrency stress + perf suite |
+| `HALCYON_SANITIZER` | `` | Sanitizer to apply to the stress suite: `thread`, `address`, `undefined`, or empty |
 | `HALCYON_BUILD_SMOKE_TEST` | `ON` | Add the install / `find_package` smoke test (only with `HALCYON_BUILD_TESTS`) |
 | `HALCYON_BUILD_EXAMPLES` | `OFF` | Build example programs |
 | `HALCYON_WITH_PROMETHEUS` | `OFF` | Compile Prometheus metrics adapter |
@@ -172,6 +199,7 @@ src/
 tests/
   unit/                   GoogleTest; MockCliDriver — no live DB required
   integration/            Dockerized Db2 (CTest label "integration")
+  stress/                 Concurrency correctness + perf harness (CTest label "stress")
 cmake/                    FindDB2CLI.cmake, package config
 third_party/clidriver/    Vendored IBM Db2 CLI driver (gitignored)
 examples/                 OO and functional usage samples
@@ -215,6 +243,8 @@ When built with the optional adapters, Halcyon emits the following Prometheus me
 | `halcyon_reconnects_total` | Counter | Transparent reconnect events |
 | `halcyon_retries_total{outcome}` | Counter | Auto-retry events |
 | `halcyon_errors_total{code}` | Counter | Errors by `ErrorCode` |
+| `halcyon_stmt_cache_total{result}` | Counter | Statement cache hits and misses (`result=hit\|miss`) |
+| `halcyon_stmt_cache_size` | Gauge | Current number of cached prepared statements |
 
 OpenTelemetry spans: `halcyon.query`, `halcyon.execute`, `halcyon.transaction`, `halcyon.acquire`, `halcyon.reconnect` — with `db.system=db2`, `db.statement`, `db.rows_affected`, `error.sqlstate` attributes.
 

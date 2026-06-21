@@ -1,6 +1,6 @@
 # Halcyon Concurrency Stress & Performance Suite — Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Build a concurrency stress & performance suite that proves Halcyon is race/deadlock-free under high concurrency (assertion + sanitizer driven) and reports its throughput/latency/scaling.
 
@@ -38,7 +38,7 @@ All stress code is in namespace `halcyon::stress` and depends only on public hea
 - Create: `tests/stress/CMakeLists.txt`
 - Create: `tests/stress/correctness/test_stress_concurrency.cpp`
 
-- [ ] **Step 1: Add the CMake options**
+- [x] **Step 1: Add the CMake options**
 
 In `CMakeLists.txt`, after the existing `option(HALCYON_BUILD_SMOKE_TEST ...)` line (currently line 19), add:
 
@@ -49,7 +49,7 @@ set(HALCYON_SANITIZER "" CACHE STRING
 set_property(CACHE HALCYON_SANITIZER PROPERTY STRINGS "" thread address undefined)
 ```
 
-- [ ] **Step 2: Wire the subdirectory**
+- [x] **Step 2: Wire the subdirectory**
 
 In `tests/CMakeLists.txt`, after the existing `if(HALCYON_BUILD_INTEGRATION_TESTS) ... endif()` block, add:
 
@@ -59,7 +59,7 @@ if(HALCYON_BUILD_STRESS_TESTS)
 endif()
 ```
 
-- [ ] **Step 3: Create the stress CMakeLists with a sanitizer helper and the gtest target**
+- [x] **Step 3: Create the stress CMakeLists with a sanitizer helper and the gtest target**
 
 Create `tests/stress/CMakeLists.txt`:
 
@@ -99,7 +99,7 @@ target_compile_options(halcyon_stress PRIVATE -Wall -Wextra)
 halcyon_apply_sanitizer(halcyon_stress)
 ```
 
-- [ ] **Step 4: Create a minimal smoke test so both targets compile and link**
+- [x] **Step 4: Create a minimal smoke test so both targets compile and link**
 
 Create `tests/stress/correctness/test_stress_concurrency.cpp`:
 
@@ -123,7 +123,7 @@ Create `tests/stress/support/workload_runner.cpp`:
 // Definitions added in Task 4.
 ```
 
-- [ ] **Step 5: Configure and build to verify the scaffolding**
+- [x] **Step 5: Configure and build to verify the scaffolding**
 
 Run:
 
@@ -134,12 +134,12 @@ cmake --build build -j --target halcyon_stress_tests halcyon_stress
 
 Expected: both targets build. `ctest --test-dir build -L stress -N` lists `StressSmoke.TargetBuildsAndRuns`.
 
-- [ ] **Step 6: Run the labeled test**
+- [x] **Step 6: Run the labeled test**
 
 Run: `ctest --test-dir build -L stress --output-on-failure`
 Expected: 1 test, PASS.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add CMakeLists.txt tests/CMakeLists.txt tests/stress/
@@ -154,7 +154,7 @@ git commit -m "build: scaffold concurrency stress suite (targets, sanitizer opti
 - Create: `tests/stress/support/latency_histogram.hpp`
 - Test: `tests/stress/correctness/test_stress_concurrency.cpp`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Replace the body of `tests/stress/correctness/test_stress_concurrency.cpp` with:
 
@@ -184,12 +184,12 @@ TEST(LatencyHistogramTest, PercentileIsMonotonic) {
 }
 ```
 
-- [ ] **Step 2: Run to verify it fails**
+- [x] **Step 2: Run to verify it fails**
 
 Run: `cmake --build build -j --target halcyon_stress_tests`
 Expected: FAIL to compile — `latency_histogram.hpp` not found.
 
-- [ ] **Step 3: Implement the histogram**
+- [x] **Step 3: Implement the histogram**
 
 Create `tests/stress/support/latency_histogram.hpp`:
 
@@ -259,12 +259,12 @@ private:
 }  // namespace halcyon::stress
 ```
 
-- [ ] **Step 4: Run to verify it passes**
+- [x] **Step 4: Run to verify it passes**
 
 Run: `cmake --build build -j --target halcyon_stress_tests && ctest --test-dir build -L stress --output-on-failure -R LatencyHistogramTest`
 Expected: 2 tests PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add tests/stress/support/latency_histogram.hpp tests/stress/correctness/test_stress_concurrency.cpp
@@ -279,7 +279,7 @@ git commit -m "test: add LatencyHistogram for the stress suite"
 - Create: `tests/stress/support/concurrent_fake_driver.hpp`
 - Test: `tests/stress/correctness/test_stress_concurrency.cpp`
 
-- [ ] **Step 1: Write the failing self-tests**
+- [x] **Step 1: Write the failing self-tests**
 
 Append to `tests/stress/correctness/test_stress_concurrency.cpp` (keep the histogram tests and the `#include`s above):
 
@@ -325,12 +325,12 @@ TEST(FakeDriverTest, StatementOnDeadConnectionErrors) {
 }
 ```
 
-- [ ] **Step 2: Run to verify it fails**
+- [x] **Step 2: Run to verify it fails**
 
 Run: `cmake --build build -j --target halcyon_stress_tests`
 Expected: FAIL to compile — `concurrent_fake_driver.hpp` not found.
 
-- [ ] **Step 3: Implement the fake driver**
+- [x] **Step 3: Implement the fake driver**
 
 Create `tests/stress/support/concurrent_fake_driver.hpp`:
 
@@ -607,12 +607,12 @@ private:
 }  // namespace halcyon::stress
 ```
 
-- [ ] **Step 4: Run to verify it passes**
+- [x] **Step 4: Run to verify it passes**
 
 Run: `cmake --build build -j --target halcyon_stress_tests && ctest --test-dir build -L stress --output-on-failure -R FakeDriverTest`
 Expected: 3 tests PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add tests/stress/support/concurrent_fake_driver.hpp tests/stress/correctness/test_stress_concurrency.cpp
@@ -628,7 +628,7 @@ git commit -m "test: add thread-safe ConcurrentFakeDriver for stress suite"
 - Modify: `tests/stress/support/workload_runner.cpp`
 - Test: `tests/stress/correctness/test_stress_concurrency.cpp`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Append to `tests/stress/correctness/test_stress_concurrency.cpp`:
 
@@ -678,12 +678,12 @@ TEST(WorkloadRunnerTest, DurationModeRunsAndReportsThroughput) {
 }
 ```
 
-- [ ] **Step 2: Run to verify it fails**
+- [x] **Step 2: Run to verify it fails**
 
 Run: `cmake --build build -j --target halcyon_stress_tests`
 Expected: FAIL to compile — `workload_runner.hpp` not found.
 
-- [ ] **Step 3: Declare the runner types**
+- [x] **Step 3: Declare the runner types**
 
 Create `tests/stress/support/workload_runner.hpp`:
 
@@ -767,7 +767,7 @@ RunReport run_workload(const Workload& w, const RunConfig& cfg);
 }  // namespace halcyon::stress
 ```
 
-- [ ] **Step 4: Implement the runner**
+- [x] **Step 4: Implement the runner**
 
 Replace `tests/stress/support/workload_runner.cpp` with:
 
@@ -871,12 +871,12 @@ RunReport run_workload(const Workload& w, const RunConfig& cfg) {
 }  // namespace halcyon::stress
 ```
 
-- [ ] **Step 5: Run to verify it passes**
+- [x] **Step 5: Run to verify it passes**
 
 Run: `cmake --build build -j --target halcyon_stress_tests && ctest --test-dir build -L stress --output-on-failure -R WorkloadRunnerTest`
 Expected: 3 tests PASS. (Note: in `total_iters` mode the exact op count holds because the shared countdown is decremented atomically; a worker that draws `<= 0` exits without running the body.)
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add tests/stress/support/workload_runner.hpp tests/stress/support/workload_runner.cpp tests/stress/correctness/test_stress_concurrency.cpp
@@ -891,7 +891,7 @@ git commit -m "test: add barrier-synced WorkloadRunner with latency capture"
 - Create: `tests/stress/support/workloads.hpp`
 - Test: `tests/stress/correctness/test_stress_concurrency.cpp`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Append to `tests/stress/correctness/test_stress_concurrency.cpp`:
 
@@ -924,12 +924,12 @@ TEST(StressScenario, PoolContentionStaysConsistent) {
 }
 ```
 
-- [ ] **Step 2: Run to verify it fails**
+- [x] **Step 2: Run to verify it fails**
 
 Run: `cmake --build build -j --target halcyon_stress_tests`
 Expected: FAIL to compile — `workloads.hpp` not found.
 
-- [ ] **Step 3: Implement `workloads.hpp` with `config_for`, the `One` row, and the pool-contention factory**
+- [x] **Step 3: Implement `workloads.hpp` with `config_for`, the `One` row, and the pool-contention factory**
 
 Create `tests/stress/support/workloads.hpp`:
 
@@ -1032,12 +1032,12 @@ inline Workload make_pool_contention(Database& db) {
 }  // namespace halcyon::stress
 ```
 
-- [ ] **Step 4: Run to verify it passes**
+- [x] **Step 4: Run to verify it passes**
 
 Run: `cmake --build build -j --target halcyon_stress_tests && ctest --test-dir build -L stress --output-on-failure -R StressScenario.PoolContention`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add tests/stress/support/workloads.hpp tests/stress/correctness/test_stress_concurrency.cpp
@@ -1052,7 +1052,7 @@ git commit -m "test: add shared scenario factories + pool-contention stress scen
 - Modify: `tests/stress/support/workloads.hpp`
 - Test: `tests/stress/correctness/test_stress_concurrency.cpp`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Append to `tests/stress/correctness/test_stress_concurrency.cpp`:
 
@@ -1076,12 +1076,12 @@ TEST(StressScenario, ExecutorSaturationResolvesEveryFuture) {
 }
 ```
 
-- [ ] **Step 2: Run to verify it fails**
+- [x] **Step 2: Run to verify it fails**
 
 Run: `cmake --build build -j --target halcyon_stress_tests`
 Expected: FAIL to compile — `make_executor_saturation` undeclared.
 
-- [ ] **Step 3: Add the factory**
+- [x] **Step 3: Add the factory**
 
 In `tests/stress/support/workloads.hpp`, add before the closing `}  // namespace halcyon::stress`:
 
@@ -1104,12 +1104,12 @@ inline Workload make_executor_saturation(Database& db) {
 }
 ```
 
-- [ ] **Step 4: Run to verify it passes**
+- [x] **Step 4: Run to verify it passes**
 
 Run: `cmake --build build -j --target halcyon_stress_tests && ctest --test-dir build -L stress --output-on-failure -R StressScenario.ExecutorSaturation`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add tests/stress/support/workloads.hpp tests/stress/correctness/test_stress_concurrency.cpp
@@ -1124,7 +1124,7 @@ git commit -m "test: add async executor-saturation stress scenario"
 - Modify: `tests/stress/support/workloads.hpp`
 - Test: `tests/stress/correctness/test_stress_concurrency.cpp`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Append to `tests/stress/correctness/test_stress_concurrency.cpp`:
 
@@ -1150,12 +1150,12 @@ TEST(StressScenario, StatementCacheStaysCorrectUnderReuse) {
 }
 ```
 
-- [ ] **Step 2: Run to verify it fails**
+- [x] **Step 2: Run to verify it fails**
 
 Run: `cmake --build build -j --target halcyon_stress_tests`
 Expected: FAIL to compile — `make_cache_churn` undeclared.
 
-- [ ] **Step 3: Add the factory**
+- [x] **Step 3: Add the factory**
 
 In `tests/stress/support/workloads.hpp`, add before the closing namespace brace:
 
@@ -1178,12 +1178,12 @@ inline Workload make_cache_churn(Database& db) {
 }
 ```
 
-- [ ] **Step 4: Run to verify it passes**
+- [x] **Step 4: Run to verify it passes**
 
 Run: `cmake --build build -j --target halcyon_stress_tests && ctest --test-dir build -L stress --output-on-failure -R StressScenario.StatementCache`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add tests/stress/support/workloads.hpp tests/stress/correctness/test_stress_concurrency.cpp
@@ -1198,7 +1198,7 @@ git commit -m "test: add statement-cache reuse stress scenario"
 - Modify: `tests/stress/support/workloads.hpp`
 - Test: `tests/stress/correctness/test_stress_concurrency.cpp`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Append to `tests/stress/correctness/test_stress_concurrency.cpp`:
 
@@ -1228,12 +1228,12 @@ TEST(StressScenario, ReconnectAndRetryRecoverUnderFaults) {
 
 Rationale for "always recovers": the facade gives read-only SELECTs `idempotent(3)`; a retry re-executes, incrementing the fake's global execute counter, and three attempts can never all land on multiples of 7 (multiples of 7 are never consecutive), so each op succeeds within its attempts.
 
-- [ ] **Step 2: Run to verify it fails**
+- [x] **Step 2: Run to verify it fails**
 
 Run: `cmake --build build -j --target halcyon_stress_tests`
 Expected: FAIL to compile — `make_reconnect_faults` undeclared.
 
-- [ ] **Step 3: Add the factory**
+- [x] **Step 3: Add the factory**
 
 In `tests/stress/support/workloads.hpp`, add before the closing namespace brace:
 
@@ -1256,12 +1256,12 @@ inline Workload make_reconnect_faults(Database& db) {
 }
 ```
 
-- [ ] **Step 4: Run to verify it passes**
+- [x] **Step 4: Run to verify it passes**
 
 Run: `cmake --build build -j --target halcyon_stress_tests && ctest --test-dir build -L stress --output-on-failure -R StressScenario.ReconnectAndRetry`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add tests/stress/support/workloads.hpp tests/stress/correctness/test_stress_concurrency.cpp
@@ -1276,7 +1276,7 @@ git commit -m "test: add reconnect + fault-injection stress scenario"
 - Modify: `tests/stress/support/workloads.hpp`
 - Test: `tests/stress/correctness/test_stress_concurrency.cpp`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Append to `tests/stress/correctness/test_stress_concurrency.cpp`:
 
@@ -1303,12 +1303,12 @@ TEST(StressScenario, TransactionChurnCommitsAndRollbacksBalance) {
 }
 ```
 
-- [ ] **Step 2: Run to verify it fails**
+- [x] **Step 2: Run to verify it fails**
 
 Run: `cmake --build build -j --target halcyon_stress_tests`
 Expected: FAIL to compile — `make_txn_churn` undeclared.
 
-- [ ] **Step 3: Add the factory**
+- [x] **Step 3: Add the factory**
 
 In `tests/stress/support/workloads.hpp`, add before the closing namespace brace (it needs `<halcyon/transaction.hpp>` types via the facade, already included through `database.hpp`):
 
@@ -1343,12 +1343,12 @@ inline Workload make_txn_churn(Database& db) {
 }
 ```
 
-- [ ] **Step 4: Run to verify it passes**
+- [x] **Step 4: Run to verify it passes**
 
 Run: `cmake --build build -j --target halcyon_stress_tests && ctest --test-dir build -L stress --output-on-failure -R StressScenario.TransactionChurn`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add tests/stress/support/workloads.hpp tests/stress/correctness/test_stress_concurrency.cpp
@@ -1363,7 +1363,7 @@ git commit -m "test: add transaction-churn stress scenario"
 - Modify: `tests/stress/support/workloads.hpp`
 - Test: `tests/stress/correctness/test_stress_concurrency.cpp`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Append to `tests/stress/correctness/test_stress_concurrency.cpp`:
 
@@ -1415,21 +1415,21 @@ TEST(StressScenario, DestroyDatabaseWithInflightAsyncWork) {
 }
 ```
 
-- [ ] **Step 2: Run to verify it fails or passes-but-incomplete**
+- [x] **Step 2: Run to verify it fails or passes-but-incomplete**
 
 Run: `cmake --build build -j --target halcyon_stress_tests`
 Expected: compiles (no new factory needed — Scenario 6 reuses `make_pool_contention` and `queryAsync`). If it fails to build, it is because `select_n` must be visible; it already is via `workloads.hpp`.
 
-- [ ] **Step 3: No new implementation required**
+- [x] **Step 3: No new implementation required**
 
 Scenario 6 exercises existing code paths (the pool maintenance thread + executor drain) and needs no new factory. If a sanitizer flags a real race here, fix the production code under `include/halcyon/` per the systematic-debugging skill — do not paper over it in the test.
 
-- [ ] **Step 4: Run to verify it passes**
+- [x] **Step 4: Run to verify it passes**
 
 Run: `cmake --build build -j --target halcyon_stress_tests && ctest --test-dir build -L stress --output-on-failure -R StressScenario`
 Expected: all `StressScenario.*` PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add tests/stress/correctness/test_stress_concurrency.cpp
@@ -1444,7 +1444,7 @@ git commit -m "test: add pool-lifecycle race + in-flight teardown stress scenari
 - Modify: `tests/stress/perf/halcyon_stress_main.cpp`
 - Test: manual run (not a CTest test)
 
-- [ ] **Step 1: Implement the harness**
+- [x] **Step 1: Implement the harness**
 
 Replace `tests/stress/perf/halcyon_stress_main.cpp` with:
 
@@ -1632,17 +1632,17 @@ int main(int argc, char** argv) {
 }
 ```
 
-- [ ] **Step 2: Build**
+- [x] **Step 2: Build**
 
 Run: `cmake --build build -j --target halcyon_stress`
 Expected: builds clean.
 
-- [ ] **Step 3: Run a quick fake sweep to verify output**
+- [x] **Step 3: Run a quick fake sweep to verify output**
 
 Run: `./build/tests/stress/halcyon_stress --scenario=pool --threads=1,2,4,8 --duration=500`
 Expected: a table with one row per thread count, throughput rising with threads, and a `[gate] pool scaling PASS|WARN` line. Exit code 0 (no `--strict`).
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add tests/stress/perf/halcyon_stress_main.cpp
@@ -1657,7 +1657,7 @@ git commit -m "feat: add halcyon_stress perf harness (scaling sweep, report, sof
 - Create: `tests/stress/README.md`
 - Modify: `AGENTS.md`
 
-- [ ] **Step 1: Write the stress README**
+- [x] **Step 1: Write the stress README**
 
 Create `tests/stress/README.md`:
 
@@ -1705,7 +1705,7 @@ export HALCYON_TEST_DSN="DATABASE=SAMPLE;HOSTNAME=localhost;PORT=50000;UID=db2in
 ```
 ```
 
-- [ ] **Step 2: Document in AGENTS.md**
+- [x] **Step 2: Document in AGENTS.md**
 
 In `AGENTS.md`, under the `## Build & test` section, after the "Key CMake options" paragraph, add:
 
@@ -1727,7 +1727,7 @@ ctest --test-dir build -L stress --output-on-failure
 See `tests/stress/README.md` for details.
 ```
 
-- [ ] **Step 3: Full build + run under ThreadSanitizer**
+- [x] **Step 3: Full build + run under ThreadSanitizer**
 
 Run:
 
@@ -1743,7 +1743,7 @@ the output. If TSan reports a data race in Halcyon production code, stop and fix
 via the systematic-debugging skill (it is a real finding — that is the point of
 this suite). If the race is inside the fake/runner test code, fix it there.
 
-- [ ] **Step 4: Full build + run under AddressSanitizer**
+- [x] **Step 4: Full build + run under AddressSanitizer**
 
 Run:
 
@@ -1756,7 +1756,7 @@ ctest --test-dir build-asan -L stress --output-on-failure
 
 Expected: all PASS, no ASan reports (especially `DestroyDatabaseWithInflightAsyncWork`).
 
-- [ ] **Step 5: Confirm the default build is unaffected**
+- [x] **Step 5: Confirm the default build is unaffected**
 
 Run:
 
@@ -1768,7 +1768,7 @@ ctest --test-dir build --output-on-failure     # stress tests absent; unit suite
 
 Expected: the normal unit suite runs as before; no `stress` tests are built or run.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add tests/stress/README.md AGENTS.md
@@ -1784,7 +1784,7 @@ git commit -m "docs: document the concurrency stress + perf suite"
 AGENTS.md requires running the full suite including live integration before
 claiming completion. The perf harness's live backend is the relevant exercise.
 
-- [ ] **Step 1: Bring up Db2 and run the existing integration suite**
+- [x] **Step 1: Bring up Db2 and run the existing integration suite**
 
 ```bash
 cmake -S . -B build -DHALCYON_BUILD_TESTS=ON -DHALCYON_BUILD_INTEGRATION_TESTS=ON \
@@ -1798,7 +1798,7 @@ ctest --test-dir build -L integration --output-on-failure
 
 Expected: integration tests PASS (not Skipped).
 
-- [ ] **Step 2: Run the perf harness against live Db2**
+- [x] **Step 2: Run the perf harness against live Db2**
 
 ```bash
 ./build/tests/stress/halcyon_stress --backend=live --scenario=pool,executor,cache,txn \
@@ -1809,13 +1809,13 @@ Expected: a report with non-zero throughput and zero `FAILED` rows for each
 scenario/thread cell. (The `reconnect` scenario is fake-only and is skipped on
 live automatically.)
 
-- [ ] **Step 3: Tear down**
+- [x] **Step 3: Tear down**
 
 ```bash
 docker compose -f docker/docker-compose.yml down
 ```
 
-- [ ] **Step 4: Final commit (if any verification fixes were needed)**
+- [x] **Step 4: Final commit (if any verification fixes were needed)**
 
 ```bash
 git add -A

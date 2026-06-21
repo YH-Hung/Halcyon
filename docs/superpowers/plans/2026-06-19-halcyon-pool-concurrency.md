@@ -1,6 +1,6 @@
 # Halcyon Pool & Concurrency Implementation Plan (Plan 3)
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Add the concurrency layer on top of the Plan 2 core: a portable, mockable
 backoff/retry policy (`BackoffPolicy`, `ExecPolicy`, `with_retry`, read-only
@@ -130,7 +130,7 @@ This is pure, portable C++ and must be unit-tested without a DB or real sleeping
 - Modify: `tests/CMakeLists.txt` (add `unit/test_retry.cpp`)
 - Test: `tests/unit/test_retry.cpp`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `tests/unit/test_retry.cpp`:
 
@@ -237,12 +237,12 @@ TEST(IsReadOnly, RecognizesSafeStatements) {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Add `unit/test_retry.cpp` to `tests/CMakeLists.txt` (Task 6 shows the final list),
 reconfigure, build. Expected: compile FAIL — `halcyon/retry.hpp` not found.
 
-- [ ] **Step 3: Write the retry header**
+- [x] **Step 3: Write the retry header**
 
 Create `include/halcyon/retry.hpp`:
 
@@ -330,11 +330,11 @@ inline bool is_read_only(std::string_view sql) noexcept {
 }  // namespace halcyon
 ```
 
-- [ ] **Step 4: Wire into the build**
+- [x] **Step 4: Wire into the build**
 
 Add `unit/test_retry.cpp` to `halcyon_unit_tests` in `tests/CMakeLists.txt`.
 
-- [ ] **Step 5: Build and run to verify pass**
+- [x] **Step 5: Build and run to verify pass**
 
 ```bash
 cmake --build build -j
@@ -343,7 +343,7 @@ ctest --test-dir build -R "Backoff|WithRetry|IsReadOnly" --output-on-failure
 
 Expected: all retry tests PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add include/halcyon/retry.hpp tests/CMakeLists.txt tests/unit/test_retry.cpp
@@ -364,7 +364,7 @@ reaper (Task 4) are appended to the same header.
 - Modify: `tests/CMakeLists.txt` (add `unit/test_pool.cpp`, link `Threads::Threads`)
 - Test: `tests/unit/test_pool.cpp` (basics portion)
 
-- [ ] **Step 1: Write the failing test (basics)**
+- [x] **Step 1: Write the failing test (basics)**
 
 Create `tests/unit/test_pool.cpp`:
 
@@ -475,12 +475,12 @@ TEST(PoolBasics, PooledConnectionRunsQueries) {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Add `unit/test_pool.cpp` to `tests/CMakeLists.txt`, reconfigure, build. Expected:
 compile FAIL — `halcyon/pool.hpp` not found.
 
-- [ ] **Step 3: Write `pool.hpp` (core)**
+- [x] **Step 3: Write `pool.hpp` (core)**
 
 Create `include/halcyon/pool.hpp`:
 
@@ -784,7 +784,7 @@ inline void ConnectionPool::maintain() {}
 > backoff sleeps while `mu_` is held, briefly serializing growth. Revisit if the
 > integration concurrency test shows contention.
 
-- [ ] **Step 4: Wire into the build (link Threads)**
+- [x] **Step 4: Wire into the build (link Threads)**
 
 In `tests/CMakeLists.txt`, ensure the threading library is linked (the pool uses
 `std::thread`). Add near the top, after `FetchContent_MakeAvailable(googletest)`:
@@ -802,7 +802,7 @@ target_link_libraries(halcyon_unit_tests
 
 Also add `unit/test_pool.cpp` to `halcyon_unit_tests`.
 
-- [ ] **Step 5: Build and run to verify pass**
+- [x] **Step 5: Build and run to verify pass**
 
 ```bash
 cmake --build build -j
@@ -811,7 +811,7 @@ ctest --test-dir build -R PoolBasics --output-on-failure
 
 Expected: all `PoolBasics.*` tests PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add include/halcyon/pool.hpp tests/CMakeLists.txt tests/unit/test_pool.cpp
@@ -831,7 +831,7 @@ this task pins the behavior with tests and tunes `make_connection` retries.
 - Modify: `tests/unit/test_pool.cpp` (append validation/reconnect tests)
 - (No header change expected; if a test fails, fix `pool.hpp` accordingly.)
 
-- [ ] **Step 1: Append the failing tests**
+- [x] **Step 1: Append the failing tests**
 
 Append to `tests/unit/test_pool.cpp`:
 
@@ -916,7 +916,7 @@ TEST(PoolReconnect, ReturnsErrorWhenAllAttemptsFail) {
 }
 ```
 
-- [ ] **Step 2: Build and run to verify pass**
+- [x] **Step 2: Build and run to verify pass**
 
 ```bash
 cmake --build build -j
@@ -929,7 +929,7 @@ destroyed before the new one is assigned in `ensure_alive_locked`; assigning
 `s->conn = std::move(c.value())` releases the old `Connection` (calling
 `disconnect`) — verify the move-assignment in `pool.hpp` and adjust if needed.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add tests/unit/test_pool.cpp include/halcyon/pool.hpp
@@ -950,7 +950,7 @@ clock and call `maintain()` directly (no real sleeping, no thread).
 - Modify: `tests/CMakeLists.txt` (add `unit/test_pool_maintenance.cpp`)
 - Test: `tests/unit/test_pool_maintenance.cpp`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `tests/unit/test_pool_maintenance.cpp`:
 
@@ -1054,12 +1054,12 @@ TEST(PoolMaintenance, RefillsToMinAfterBrokenRemoval) {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Add `unit/test_pool_maintenance.cpp` to `tests/CMakeLists.txt`, reconfigure,
 build. Expected: tests FAIL (the Task 2 `maintain()` is a no-op).
 
-- [ ] **Step 3: Implement the real `maintain()`**
+- [x] **Step 3: Implement the real `maintain()`**
 
 In `include/halcyon/pool.hpp`, delete the stub line
 `inline void ConnectionPool::maintain() {}` and replace it with the full
@@ -1098,7 +1098,7 @@ inline void ConnectionPool::maintain() {
 > slots being reaped are erased. `make_connection()` runs under the lock here too,
 > matching the Task 2 caveat.
 
-- [ ] **Step 4: Build and run to verify pass**
+- [x] **Step 4: Build and run to verify pass**
 
 ```bash
 cmake --build build -j
@@ -1108,7 +1108,7 @@ ctest --test-dir build -R PoolMaintenance --output-on-failure
 Expected: all `PoolMaintenance.*` tests PASS, and the earlier `PoolBasics.*` /
 `PoolValidation.*` / `PoolBroken.*` / `PoolReconnect.*` still PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add include/halcyon/pool.hpp tests/CMakeLists.txt \
@@ -1129,7 +1129,7 @@ acquires a pooled connection on a worker and runs `fn(Connection&)`.
 - Modify: `tests/CMakeLists.txt` (add `unit/test_async.cpp`)
 - Test: `tests/unit/test_async.cpp`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `tests/unit/test_async.cpp`:
 
@@ -1201,12 +1201,12 @@ TEST(AsyncWithConnection, RunsQueryOnPooledConnection) {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Add `unit/test_async.cpp` to `tests/CMakeLists.txt`, reconfigure, build. Expected:
 compile FAIL — `halcyon/async.hpp` not found.
 
-- [ ] **Step 3: Write the async header**
+- [x] **Step 3: Write the async header**
 
 Create `include/halcyon/async.hpp`:
 
@@ -1312,12 +1312,12 @@ auto async_with_connection(Executor& ex, ConnectionPool& pool, Fn fn)
 > set, so all submitted tasks run before `~Executor` returns (the
 > `Executor.DrainsOutstandingTasksOnDestruction` test pins this).
 
-- [ ] **Step 4: Wire into the build**
+- [x] **Step 4: Wire into the build**
 
 Add `unit/test_async.cpp` to `halcyon_unit_tests` in `tests/CMakeLists.txt`.
 (`Threads::Threads` was already linked in Task 2.)
 
-- [ ] **Step 5: Build and run to verify pass**
+- [x] **Step 5: Build and run to verify pass**
 
 ```bash
 cmake --build build -j
@@ -1326,7 +1326,7 @@ ctest --test-dir build -R "Executor|AsyncWithConnection" --output-on-failure
 
 Expected: all async tests PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add include/halcyon/async.hpp tests/CMakeLists.txt tests/unit/test_async.cpp
@@ -1344,7 +1344,7 @@ runs only when `HALCYON_TEST_DSN` is set (skipped otherwise, like Plan 2).
 - Modify: `include/halcyon/halcyon.hpp`
 - Modify: `tests/integration/test_db2_roundtrip.cpp`
 
-- [ ] **Step 1: Extend the umbrella header**
+- [x] **Step 1: Extend the umbrella header**
 
 Edit `include/halcyon/halcyon.hpp` to add the pool/async/retry headers:
 
@@ -1364,7 +1364,7 @@ Edit `include/halcyon/halcyon.hpp` to add the pool/async/retry headers:
 #include "halcyon/detail/cli/db2_cli_driver.hpp"
 ```
 
-- [ ] **Step 2: Add a gated pool concurrency test**
+- [x] **Step 2: Add a gated pool concurrency test**
 
 Append to `tests/integration/test_db2_roundtrip.cpp` (it already includes
 `halcyon/halcyon.hpp` and defines the `dsn()` helper):
@@ -1406,7 +1406,7 @@ TEST(Db2PoolIntegration, ConcurrentAcquireAndQuery) {
 }
 ```
 
-- [ ] **Step 3: Build everything (no DB needed to compile)**
+- [x] **Step 3: Build everything (no DB needed to compile)**
 
 ```bash
 cmake -S . -B build -DHALCYON_BUILD_TESTS=ON -DHALCYON_BUILD_INTEGRATION_TESTS=ON
@@ -1416,7 +1416,7 @@ cmake --build build -j
 Expected: unit + integration targets build. The new integration test is reported
 **skipped** without `HALCYON_TEST_DSN`.
 
-- [ ] **Step 4: Run the full unit suite**
+- [x] **Step 4: Run the full unit suite**
 
 ```bash
 ctest --test-dir build --output-on-failure
@@ -1424,7 +1424,7 @@ ctest --test-dir build --output-on-failure
 
 Expected: every unit test from Plans 1–3 PASSES.
 
-- [ ] **Step 5: (Optional) Run integration against live Db2**
+- [x] **Step 5: (Optional) Run integration against live Db2**
 
 ```bash
 docker compose -f docker/docker-compose.yml up -d
@@ -1436,7 +1436,7 @@ docker compose -f docker/docker-compose.yml down
 
 Expected: `Db2Integration.*` and `Db2PoolIntegration.*` PASS against live Db2.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add include/halcyon/halcyon.hpp tests/integration/test_db2_roundtrip.cpp

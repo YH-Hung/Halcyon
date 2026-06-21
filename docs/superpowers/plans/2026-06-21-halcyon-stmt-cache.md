@@ -1,6 +1,6 @@
 # Per-Connection Prepared-Statement LRU Cache Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Add a transparent, per-connection fixed-capacity LRU cache of prepared
 statement handles so repeated SQL on a pooled connection skips re-`prepare`,
@@ -124,7 +124,7 @@ pool's resolved metrics sink into `Connection::open`.
 - Modify: `src/detail/cli/db2_cli_driver.cpp`
 - Modify: `tests/unit/test_cli_seam.cpp`
 
-- [ ] **Step 1: Write the failing seam test**
+- [x] **Step 1: Write the failing seam test**
 
 Append to `tests/unit/test_cli_seam.cpp`:
 
@@ -143,13 +143,13 @@ TEST(CliSeamStatement, CloseCursorIsCallableAndIdempotent) {
 }
 ```
 
-- [ ] **Step 2: Run the test to verify it fails to compile**
+- [x] **Step 2: Run the test to verify it fails to compile**
 
 Run: `cmake --build build --target halcyon_unit_tests -j`
 Expected: FAIL — `closeCursor` is not a member of `MockCliDriver` /
 `closeCursorCalls` undefined.
 
-- [ ] **Step 3: Add the pure virtual to the seam**
+- [x] **Step 3: Add the pure virtual to the seam**
 
 In `include/halcyon/detail/cli/driver.hpp`, add after the `finalize` declaration
 (after line 73, inside the `// --- Prepared-statement data path` group):
@@ -161,7 +161,7 @@ In `include/halcyon/detail/cli/driver.hpp`, add after the `finalize` declaration
     virtual Result<void> closeCursor(StatementHandle stmt) = 0;
 ```
 
-- [ ] **Step 4: Implement it in the mock**
+- [x] **Step 4: Implement it in the mock**
 
 In `tests/unit/mock_cli_driver.hpp`, add a counter near the other statement
 counters (after the `finalized` vector around line 178):
@@ -181,7 +181,7 @@ And add the method after `finalize` (after line 175):
     }
 ```
 
-- [ ] **Step 5: Implement it in the real driver**
+- [x] **Step 5: Implement it in the real driver**
 
 In `src/detail/cli/db2_cli_driver.cpp`, add after `finalize` (after line 331):
 
@@ -199,12 +199,12 @@ In `src/detail/cli/db2_cli_driver.cpp`, add after `finalize` (after line 331):
     }
 ```
 
-- [ ] **Step 6: Run the seam test to verify it passes**
+- [x] **Step 6: Run the seam test to verify it passes**
 
 Run: `cmake --build build --target halcyon_unit_tests -j && ctest --test-dir build -R CliSeamStatement --output-on-failure`
 Expected: PASS.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add include/halcyon/detail/cli/driver.hpp tests/unit/mock_cli_driver.hpp \
@@ -221,7 +221,7 @@ git commit -m "feat: add ICliDriver::closeCursor seam op for statement reuse"
 - Create: `tests/unit/test_statement_cache.cpp`
 - Modify: `tests/CMakeLists.txt`
 
-- [ ] **Step 1: Register the new unit test**
+- [x] **Step 1: Register the new unit test**
 
 In `tests/CMakeLists.txt`, add to the `add_executable(halcyon_unit_tests ...)`
 list (after `unit/test_connection.cpp` on line 19):
@@ -230,7 +230,7 @@ list (after `unit/test_connection.cpp` on line 19):
     unit/test_statement_cache.cpp
 ```
 
-- [ ] **Step 2: Write the failing cache tests**
+- [x] **Step 2: Write the failing cache tests**
 
 Create `tests/unit/test_statement_cache.cpp`:
 
@@ -370,12 +370,12 @@ TEST(StatementCache, EmitsMetrics) {
 }
 ```
 
-- [ ] **Step 3: Run the tests to verify they fail**
+- [x] **Step 3: Run the tests to verify they fail**
 
 Run: `cmake --build build --target halcyon_unit_tests -j`
 Expected: FAIL — `halcyon/detail/statement_cache.hpp` not found.
 
-- [ ] **Step 4: Create the cache header**
+- [x] **Step 4: Create the cache header**
 
 Create `include/halcyon/detail/statement_cache.hpp`:
 
@@ -622,12 +622,12 @@ the disabled/overflow paths) and `StatementCache::make_cached` (private member,
 used for hit/miss). `StatementCache` is `friend` of `StatementLease`, so it can
 call `make_transient` and construct cached leases.
 
-- [ ] **Step 5: Run the tests to verify they pass**
+- [x] **Step 5: Run the tests to verify they pass**
 
 Run: `cmake --build build --target halcyon_unit_tests -j && ctest --test-dir build -R StatementCache --output-on-failure`
 Expected: PASS (all 7 `StatementCache.*` tests).
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add include/halcyon/detail/statement_cache.hpp \
@@ -643,7 +643,7 @@ git commit -m "feat: add per-connection StatementCache with LRU + RAII lease"
 - Modify: `include/halcyon/connection.hpp`
 - Modify: `tests/unit/test_connection.cpp`
 
-- [ ] **Step 1: Write the failing connection tests**
+- [x] **Step 1: Write the failing connection tests**
 
 Append to `tests/unit/test_connection.cpp`:
 
@@ -710,12 +710,12 @@ TEST(ConnectionCache, ExecuteErrorDropsEntry) {
 }
 ```
 
-- [ ] **Step 2: Run to verify failure**
+- [x] **Step 2: Run to verify failure**
 
 Run: `cmake --build build --target halcyon_unit_tests -j`
 Expected: FAIL — `Connection::open` has no 3-arg form; `statementCacheSize` unknown.
 
-- [ ] **Step 3: Add the include and cache member**
+- [x] **Step 3: Add the include and cache member**
 
 In `include/halcyon/connection.hpp`, add the includes near the existing ones
 (after line 12, the `driver.hpp` include):
@@ -727,7 +727,7 @@ In `include/halcyon/connection.hpp`, add the includes near the existing ones
 #include "halcyon/observability/metrics.hpp"
 ```
 
-- [ ] **Step 4: Replace `ResultSet::owned_` with a lease**
+- [x] **Step 4: Replace `ResultSet::owned_` with a lease**
 
 In the `ResultSet` private section (lines 196-207), replace:
 
@@ -744,7 +744,7 @@ with:
 (The borrowing `create_borrowing` path and `Statement::execute_query` leave
 `lease_` empty, exactly as they left `owned_` empty.)
 
-- [ ] **Step 5: Update `Connection` ctor/open and add the cache member**
+- [x] **Step 5: Update `Connection` ctor/open and add the cache member**
 
 Replace the `Connection::open` (lines 222-227) and the constructor (lines 229-230)
 with:
@@ -794,7 +794,7 @@ Add the member next to `handle_` (after line 377):
     std::unique_ptr<detail::StatementCache> cache_;
 ```
 
-- [ ] **Step 6: Route the public methods through the cache**
+- [x] **Step 6: Route the public methods through the cache**
 
 Replace the anonymous-arg `query` (lines 259-265), `execute` (267-273), the named
 overloads (276-292), `queryAs` (295-310), `executeBatch` (314-329), and the
@@ -969,19 +969,19 @@ data members. Ensure there is exactly one `private:` label introducing
 `exec_lease`/`collect`/`run_query`/`reset` and the members — merge with the
 existing private section rather than duplicating the label.
 
-- [ ] **Step 7: Run the connection tests to verify they pass**
+- [x] **Step 7: Run the connection tests to verify they pass**
 
 Run: `cmake --build build --target halcyon_unit_tests -j && ctest --test-dir build -R "Connection" --output-on-failure`
 Expected: PASS — new `ConnectionCache.*` tests pass and all pre-existing
 `Connection*`/`ResultSet*` tests still pass (single-call tests are unaffected;
 the default capacity is 0).
 
-- [ ] **Step 8: Run the full unit suite (no regressions)**
+- [x] **Step 8: Run the full unit suite (no regressions)**
 
 Run: `ctest --test-dir build --output-on-failure`
 Expected: PASS — entire unit suite green.
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```bash
 git add include/halcyon/connection.hpp tests/unit/test_connection.cpp
@@ -996,7 +996,7 @@ git commit -m "feat: route Connection query/execute paths through StatementCache
 - Modify: `include/halcyon/pool.hpp`
 - Modify: `tests/unit/test_pool.cpp`
 
-- [ ] **Step 1: Write the failing pool tests**
+- [x] **Step 1: Write the failing pool tests**
 
 Append to `tests/unit/test_pool.cpp` (uses the existing `MockCliDriver`/
 `PoolConfig` includes already present in that file):
@@ -1057,12 +1057,12 @@ TEST(PoolStatementCache, ReconnectStartsWithFreshCache) {
 }
 ```
 
-- [ ] **Step 2: Run to verify failure**
+- [x] **Step 2: Run to verify failure**
 
 Run: `cmake --build build --target halcyon_unit_tests -j`
 Expected: FAIL — `PoolConfig` has no member `statementCacheSize`.
 
-- [ ] **Step 3: Add the config field**
+- [x] **Step 3: Add the config field**
 
 In `include/halcyon/pool.hpp`, add to `PoolConfig` (after line 36,
 `obs::ObservabilityConfig observability{};`):
@@ -1071,7 +1071,7 @@ In `include/halcyon/pool.hpp`, add to `PoolConfig` (after line 36,
     std::size_t statementCacheSize = 64;  // per-connection prepared-stmt LRU; 0 disables
 ```
 
-- [ ] **Step 4: Inject it when creating connections**
+- [x] **Step 4: Inject it when creating connections**
 
 In `ConnectionPool::make_connection()` (lines 289-305), change the
 `Connection::open` call (line 297) from:
@@ -1091,18 +1091,18 @@ to:
 (The `metrics_`/`has_metrics_` members are resolved in the pool ctor, lines
 235-240, so they are valid here.)
 
-- [ ] **Step 5: Run the pool tests to verify they pass**
+- [x] **Step 5: Run the pool tests to verify they pass**
 
 Run: `cmake --build build --target halcyon_unit_tests -j && ctest --test-dir build -R "PoolStatementCache" --output-on-failure`
 Expected: PASS.
 
-- [ ] **Step 6: Run the full unit suite (no regressions)**
+- [x] **Step 6: Run the full unit suite (no regressions)**
 
 Run: `ctest --test-dir build --output-on-failure`
 Expected: PASS — including the existing `test_database_batch` "single prepare
 reused" test, which now also benefits from the pool default cache.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add include/halcyon/pool.hpp tests/unit/test_pool.cpp
@@ -1119,7 +1119,7 @@ git commit -m "feat: PoolConfig.statementCacheSize injects per-connection cache 
 These run only when `HALCYON_TEST_DSN` is set (see AGENTS.md). They validate the
 real `closeCursor`-based reuse path that the mock cannot.
 
-- [ ] **Step 1: Add the reuse + cursor-correctness integration tests**
+- [x] **Step 1: Add the reuse + cursor-correctness integration tests**
 
 Append to `tests/integration/test_db2_roundtrip.cpp` (follow the file's existing
 DSN-gating pattern — read the top of the file and reuse its skip macro / fixture;
@@ -1158,7 +1158,7 @@ by the reflection/tuple layer in this codebase, use the tuple form instead:
 other integration tests in this file read scalar columns. (Read the existing tests
 first and mirror their exact row-reading style — do not invent a new one.)
 
-- [ ] **Step 2: Build with integration enabled**
+- [x] **Step 2: Build with integration enabled**
 
 Run:
 ```bash
@@ -1167,7 +1167,7 @@ cmake --build build -j
 ```
 Expected: builds clean.
 
-- [ ] **Step 3: Bring up Db2 and run the integration suite**
+- [x] **Step 3: Bring up Db2 and run the integration suite**
 
 Run (per AGENTS.md):
 ```bash
@@ -1179,11 +1179,11 @@ ctest --test-dir build -L integration --output-on-failure
 Expected: PASS — `Db2Integration.CachedStatementReuseReturnsCorrectRows` runs
 (not skipped) and passes, confirming real cursor reuse.
 
-- [ ] **Step 4: Tear down**
+- [x] **Step 4: Tear down**
 
 Run: `docker compose -f docker/docker-compose.yml down`
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add tests/integration/test_db2_roundtrip.cpp
@@ -1194,7 +1194,7 @@ git commit -m "test: integration coverage for cached prepared-statement reuse"
 
 ## Final verification (per AGENTS.md — run the WHOLE suite)
 
-- [ ] **Unit suite:**
+- [x] **Unit suite:**
 
 ```bash
 cmake -S . -B build -DHALCYON_BUILD_TESTS=ON
@@ -1203,7 +1203,7 @@ ctest --test-dir build --output-on-failure
 ```
 Expected: all unit tests PASS.
 
-- [ ] **Integration suite (live Db2 — NOT optional; a Skipped result is not verification):**
+- [x] **Integration suite (live Db2 — NOT optional; a Skipped result is not verification):**
 
 ```bash
 cmake -S . -B build -DHALCYON_BUILD_TESTS=ON -DHALCYON_BUILD_INTEGRATION_TESTS=ON
@@ -1216,7 +1216,7 @@ docker compose -f docker/docker-compose.yml down
 ```
 Expected: integration tests RUN (not skipped) and PASS.
 
-- [ ] **Style:** run `clang-format` and `clang-tidy` on the touched files; ensure
+- [x] **Style:** run `clang-format` and `clang-tidy` on the touched files; ensure
   `-Wall -Wextra -Wpedantic` clean (build with `-DHALCYON_WARNINGS_AS_ERRORS=ON`).
 
 ---

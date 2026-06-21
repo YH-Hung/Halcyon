@@ -1,6 +1,6 @@
 # Halcyon Foundation Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Stand up the Halcyon build system, error/result core types, and the mockable CLI driver seam so the rest of the library can be built and unit-tested without a live Db2.
 
@@ -39,7 +39,7 @@
 - Create: `tests/CMakeLists.txt`
 - Test: `tests/unit/test_version.cpp`
 
-- [ ] **Step 1: Write the version header**
+- [x] **Step 1: Write the version header**
 
 Create `include/halcyon/version.hpp`:
 
@@ -60,7 +60,7 @@ std::string_view version() noexcept;
 }  // namespace halcyon
 ```
 
-- [ ] **Step 2: Write the version source**
+- [x] **Step 2: Write the version source**
 
 Create `src/core/version.cpp`:
 
@@ -76,7 +76,7 @@ std::string_view version() noexcept {
 }  // namespace halcyon
 ```
 
-- [ ] **Step 3: Write the DB2 CLI find module**
+- [x] **Step 3: Write the DB2 CLI find module**
 
 Create `cmake/FindDB2CLI.cmake`. Defaults to the vendored driver, overridable via
 `-DDB2_CLIDRIVER_ROOT=...`. Produces an imported target `DB2::CLI`.
@@ -116,7 +116,7 @@ endif()
 mark_as_advanced(DB2CLI_INCLUDE_DIR DB2CLI_LIBRARY)
 ```
 
-- [ ] **Step 4: Write the top-level CMakeLists**
+- [x] **Step 4: Write the top-level CMakeLists**
 
 Create `CMakeLists.txt`. Note: `DB2::CLI` is located but not yet linked into the
 library (no `sqlcli1.h` code until Plan 2); we resolve it now to fail fast if the
@@ -164,7 +164,7 @@ if(HALCYON_BUILD_TESTS)
 endif()
 ```
 
-- [ ] **Step 5: Write the tests CMakeLists with GoogleTest**
+- [x] **Step 5: Write the tests CMakeLists with GoogleTest**
 
 Create `tests/CMakeLists.txt`:
 
@@ -189,7 +189,7 @@ include(GoogleTest)
 gtest_discover_tests(halcyon_unit_tests)
 ```
 
-- [ ] **Step 6: Write the failing smoke test**
+- [x] **Step 6: Write the failing smoke test**
 
 Create `tests/unit/test_version.cpp`:
 
@@ -209,7 +209,7 @@ TEST(Version, ConstantsMatchString) {
 }
 ```
 
-- [ ] **Step 7: Configure and build**
+- [x] **Step 7: Configure and build**
 
 Run:
 
@@ -221,12 +221,12 @@ cmake --build build -j
 Expected: configures (finds `DB2::CLI` from `third_party/clidriver`), compiles
 `halcyon` and `halcyon_unit_tests` with no errors.
 
-- [ ] **Step 8: Run the tests to verify they pass**
+- [x] **Step 8: Run the tests to verify they pass**
 
 Run: `ctest --test-dir build --output-on-failure`
 Expected: `Version.ReturnsSemanticVersionString` and `Version.ConstantsMatchString` PASS.
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```bash
 git add CMakeLists.txt cmake/FindDB2CLI.cmake include/halcyon/version.hpp \
@@ -245,7 +245,7 @@ git commit -m "build: project skeleton, DB2 CLI find module, and test harness"
 - Modify: `tests/CMakeLists.txt` (add `unit/test_error.cpp`)
 - Test: `tests/unit/test_error.cpp`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `tests/unit/test_error.cpp`:
 
@@ -289,13 +289,13 @@ TEST(ErrorModel, ExceptionCarriesErrorAndMessage) {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `ctest --test-dir build -R ErrorModel --output-on-failure` (after adding the
 file to `tests/CMakeLists.txt` and reconfiguring; build will fail to compile first).
 Expected: compile FAIL — `halcyon/error.hpp` not found / symbols undefined.
 
-- [ ] **Step 3: Write the error header**
+- [x] **Step 3: Write the error header**
 
 Create `include/halcyon/error.hpp`:
 
@@ -373,7 +373,7 @@ public:
 }  // namespace halcyon
 ```
 
-- [ ] **Step 4: Write the error source**
+- [x] **Step 4: Write the error source**
 
 Create `src/core/error.cpp`:
 
@@ -417,7 +417,7 @@ void throw_error(const Error& err) {
 }  // namespace halcyon
 ```
 
-- [ ] **Step 5: Wire into the build**
+- [x] **Step 5: Wire into the build**
 
 In `CMakeLists.txt`, change the library sources to:
 
@@ -435,7 +435,7 @@ add_executable(halcyon_unit_tests
     unit/test_error.cpp)
 ```
 
-- [ ] **Step 6: Build and run to verify pass**
+- [x] **Step 6: Build and run to verify pass**
 
 Run:
 
@@ -446,7 +446,7 @@ ctest --test-dir build -R ErrorModel --output-on-failure
 
 Expected: all three `ErrorModel.*` tests PASS.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add include/halcyon/error.hpp src/core/error.cpp CMakeLists.txt \
@@ -463,7 +463,7 @@ git commit -m "feat: add Error model with ErrorCode and exception hierarchy"
 - Modify: `tests/CMakeLists.txt` (add `unit/test_result.cpp`)
 - Test: `tests/unit/test_result.cpp`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `tests/unit/test_result.cpp`:
 
@@ -539,12 +539,12 @@ TEST(ResultVoid, OkAndError) {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `ctest --test-dir build -R Result --output-on-failure` (after adding the file
 and reconfiguring). Expected: compile FAIL — `halcyon/result.hpp` not found.
 
-- [ ] **Step 3: Write the Result header**
+- [x] **Step 3: Write the Result header**
 
 Create `include/halcyon/result.hpp`:
 
@@ -629,7 +629,7 @@ private:
 }  // namespace halcyon
 ```
 
-- [ ] **Step 4: Wire into the build**
+- [x] **Step 4: Wire into the build**
 
 In `tests/CMakeLists.txt`, add `unit/test_result.cpp` to `halcyon_unit_tests`:
 
@@ -640,7 +640,7 @@ add_executable(halcyon_unit_tests
     unit/test_result.cpp)
 ```
 
-- [ ] **Step 5: Build and run to verify pass**
+- [x] **Step 5: Build and run to verify pass**
 
 Run:
 
@@ -651,7 +651,7 @@ ctest --test-dir build -R "Result" --output-on-failure
 
 Expected: all `ResultT.*` and `ResultVoid.*` tests PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add include/halcyon/result.hpp tests/CMakeLists.txt tests/unit/test_result.cpp
@@ -668,7 +668,7 @@ git commit -m "feat: add Result<T> and Result<void> with monadic helpers"
 - Modify: `tests/CMakeLists.txt` (add `unit/test_cli_seam.cpp`)
 - Test: `tests/unit/test_cli_seam.cpp`
 
-- [ ] **Step 1: Write the seam interface header**
+- [x] **Step 1: Write the seam interface header**
 
 Create `include/halcyon/detail/cli/driver.hpp`. This is the abstraction the real
 `Db2CliDriver` (Plan 2) and `MockCliDriver` (tests) both implement. `ConnectionHandle`
@@ -712,7 +712,7 @@ public:
 }  // namespace halcyon::detail::cli
 ```
 
-- [ ] **Step 2: Write the mock driver**
+- [x] **Step 2: Write the mock driver**
 
 Create `tests/unit/mock_cli_driver.hpp`. A scriptable fake: queue outcomes and
 record calls so pool/core logic (Plans 2–3) can be tested without a database.
@@ -779,7 +779,7 @@ private:
 }  // namespace halcyon::testing
 ```
 
-- [ ] **Step 3: Write the failing seam test**
+- [x] **Step 3: Write the failing seam test**
 
 Create `tests/unit/test_cli_seam.cpp`:
 
@@ -835,12 +835,12 @@ TEST(CliSeam, DisconnectCounts) {
 }
 ```
 
-- [ ] **Step 4: Run test to verify it fails**
+- [x] **Step 4: Run test to verify it fails**
 
 Run: `ctest --test-dir build -R CliSeam --output-on-failure` (after adding the file
 and reconfiguring). Expected: compile FAIL — `driver.hpp`/`mock_cli_driver.hpp` not found.
 
-- [ ] **Step 5: Wire into the build**
+- [x] **Step 5: Wire into the build**
 
 In `tests/CMakeLists.txt`, add `unit/test_cli_seam.cpp`:
 
@@ -855,7 +855,7 @@ add_executable(halcyon_unit_tests
 (The `target_include_directories(... unit)` line added in Task 1 makes
 `mock_cli_driver.hpp` includable as `"mock_cli_driver.hpp"`.)
 
-- [ ] **Step 6: Build and run to verify pass**
+- [x] **Step 6: Build and run to verify pass**
 
 Run:
 
@@ -866,12 +866,12 @@ ctest --test-dir build -R CliSeam --output-on-failure
 
 Expected: all four `CliSeam.*` tests PASS.
 
-- [ ] **Step 7: Run the full suite**
+- [x] **Step 7: Run the full suite**
 
 Run: `ctest --test-dir build --output-on-failure`
 Expected: every test from Tasks 1–4 PASSES.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add include/halcyon/detail/cli/driver.hpp tests/unit/mock_cli_driver.hpp \

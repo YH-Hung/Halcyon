@@ -1,6 +1,6 @@
 # Halcyon Facade & Ergonomics Implementation Plan (Plan 4)
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Add the user-facing **facade** on top of the Plan 3 pool: a thread-safe
 `Database` entry point (`open`/`openOrThrow`) with OO `query`/`execute`/`queryAs`
@@ -183,7 +183,7 @@ Task 8).
 - Modify: `tests/CMakeLists.txt` (add `unit/test_transaction.cpp`)
 - Test: `tests/unit/test_transaction.cpp` (seam portion)
 
-- [ ] **Step 1: Write the failing test (seam calls through the mock)**
+- [x] **Step 1: Write the failing test (seam calls through the mock)**
 
 Create `tests/unit/test_transaction.cpp`:
 
@@ -218,7 +218,7 @@ TEST(SeamTransaction, MockRecordsAutoCommitCommitRollback) {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Add `unit/test_transaction.cpp` to `tests/CMakeLists.txt` (Task 8 shows the final
 list), reconfigure, build. Expected: compile FAIL — `halcyon/transaction.hpp` not
@@ -226,7 +226,7 @@ found and `MockCliDriver` lacks the new methods. (The `transaction.hpp` include 
 added now so Task 2 can append to the same test file; if isolating Task 1, comment
 the include and the `Transaction` using-line until Task 2.)
 
-- [ ] **Step 3: Extend the seam interface**
+- [x] **Step 3: Extend the seam interface**
 
 In `include/halcyon/detail/cli/driver.hpp`, add three pure-virtual methods to
 `ICliDriver` (after `finalize`, before the closing brace):
@@ -243,7 +243,7 @@ In `include/halcyon/detail/cli/driver.hpp`, add three pure-virtual methods to
     virtual Result<void> rollback(ConnectionHandle conn) = 0;
 ```
 
-- [ ] **Step 4: Implement in `MockCliDriver`**
+- [x] **Step 4: Implement in `MockCliDriver`**
 
 In `tests/unit/mock_cli_driver.hpp`, add scripting state (near the other counters)
 and the three overrides (after `finalize`):
@@ -285,7 +285,7 @@ and a private helper (next to `rangeError()`):
     }
 ```
 
-- [ ] **Step 5: Implement in `Db2CliDriver`**
+- [x] **Step 5: Implement in `Db2CliDriver`**
 
 In `src/detail/cli/db2_cli_driver.cpp`, add the three overrides after
 `finalize(...)` (and before the closing `private:` block). Use the connection's
@@ -340,7 +340,7 @@ Add these private helpers in the `private:` section (next to `get_string`):
 > `SQLEndTran`, `SQL_COMMIT`, `SQL_ROLLBACK`, `SQL_IS_INTEGER` all come from the
 > already-included `sqlcli1.h`/`sqlext.h`.
 
-- [ ] **Step 6: Build and run to verify pass**
+- [x] **Step 6: Build and run to verify pass**
 
 ```bash
 cmake --build build -j
@@ -350,7 +350,7 @@ ctest --test-dir build -R SeamTransaction --output-on-failure
 Expected: `SeamTransaction.*` PASSES; all prior unit tests still build (the new
 pure-virtuals are implemented by both drivers).
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add include/halcyon/detail/cli/driver.hpp src/detail/cli/db2_cli_driver.cpp \
@@ -372,7 +372,7 @@ auto-rolls-back on scope exit unless committed. `Connection::begin()` creates on
 - Modify: `include/halcyon/connection.hpp` (add `begin()` + include)
 - Modify: `tests/unit/test_transaction.cpp` (append)
 
-- [ ] **Step 1: Append the failing tests**
+- [x] **Step 1: Append the failing tests**
 
 Append to `tests/unit/test_transaction.cpp`:
 
@@ -453,7 +453,7 @@ TEST(Transaction, MoveDoesNotDoubleRollback) {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 ```bash
 cmake --build build -j
@@ -461,7 +461,7 @@ cmake --build build -j
 
 Expected: compile FAIL — no `Connection::begin`, no `Transaction`.
 
-- [ ] **Step 3: Write `transaction.hpp`**
+- [x] **Step 3: Write `transaction.hpp`**
 
 Create `include/halcyon/transaction.hpp`:
 
@@ -565,7 +565,7 @@ private:
 }  // namespace halcyon
 ```
 
-- [ ] **Step 4: Add `Connection::begin()` and a driver accessor**
+- [x] **Step 4: Add `Connection::begin()` and a driver accessor**
 
 In `include/halcyon/connection.hpp`, the `Transaction` type is defined in
 `transaction.hpp`, which includes `connection.hpp` — so `begin()` must be declared
@@ -609,7 +609,7 @@ inline Result<Transaction> Connection::begin() {
 > `Transaction` and declares `begin()`, so the core header stays free of the
 > facade type's definition.
 
-- [ ] **Step 5: Build and run to verify pass**
+- [x] **Step 5: Build and run to verify pass**
 
 ```bash
 cmake --build build -j
@@ -618,7 +618,7 @@ ctest --test-dir build -R "Transaction|SeamTransaction" --output-on-failure
 
 Expected: all `Transaction.*` and `SeamTransaction.*` PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add include/halcyon/transaction.hpp include/halcyon/connection.hpp \
@@ -641,7 +641,7 @@ overloads unwrap via `Result::value()`.
 - Modify: `tests/CMakeLists.txt` (add `unit/test_database.cpp`)
 - Test: `tests/unit/test_database.cpp`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `tests/unit/test_database.cpp`:
 
@@ -766,12 +766,12 @@ TEST(Database, ThrowingOverloadUnwraps) {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Add `unit/test_database.cpp` to `tests/CMakeLists.txt`, build. Expected: compile
 FAIL — `halcyon/database.hpp` not found.
 
-- [ ] **Step 3: Write `database.hpp` (core portion)**
+- [x] **Step 3: Write `database.hpp` (core portion)**
 
 Create `include/halcyon/database.hpp`:
 
@@ -950,7 +950,7 @@ private:
 >
 > Do not test `Database::begin()` in Task 3 — it is covered in Task 5.
 
-- [ ] **Step 4: Build and run to verify pass**
+- [x] **Step 4: Build and run to verify pass**
 
 ```bash
 cmake --build build -j
@@ -959,7 +959,7 @@ ctest --test-dir build -R "Database\." --output-on-failure
 
 Expected: all `Database.*` tests from this task PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add include/halcyon/database.hpp tests/CMakeLists.txt tests/unit/test_database.cpp
@@ -980,7 +980,7 @@ in). A connection-class error marks the lease broken so the pool discards it.
 - Modify: `tests/CMakeLists.txt` (add `unit/test_database_retry.cpp`)
 - Test: `tests/unit/test_database_retry.cpp`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `tests/unit/test_database_retry.cpp`:
 
@@ -1085,12 +1085,12 @@ TEST(DatabaseRetry, ConnectionErrorMarksLeaseBroken) {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Add `unit/test_database_retry.cpp` to `tests/CMakeLists.txt`, build. Expected:
 compile FAIL (`execute` has no `ExecPolicy` overload) and/or retry tests FAIL.
 
-- [ ] **Step 3: Implement retry wiring**
+- [x] **Step 3: Implement retry wiring**
 
 In `include/halcyon/database.hpp`, add `#include "halcyon/retry.hpp"` and replace
 the `execute`/`query`/`queryAs` bodies with retry-aware versions. Add a private
@@ -1240,7 +1240,7 @@ with the lease-preserving query loop:
 > `Error` (true for `Result<T>`). `query` cannot use it because the lease must
 > survive into the returned `QueryResult`; `query_impl` handles that explicitly.
 
-- [ ] **Step 4: Build and run to verify pass**
+- [x] **Step 4: Build and run to verify pass**
 
 ```bash
 cmake --build build -j
@@ -1249,7 +1249,7 @@ ctest --test-dir build -R "DatabaseRetry|Database\." --output-on-failure
 
 Expected: all `DatabaseRetry.*` and the Task 3 `Database.*` tests PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add include/halcyon/database.hpp include/halcyon/pool.hpp tests/CMakeLists.txt \
@@ -1273,7 +1273,7 @@ and the functional `transaction(db, fn)` / member `db.transaction(fn)` helper
   adding a new file — append the tests to `test_database.cpp`)
 - Test: `tests/unit/test_database.cpp` (append functional + transaction tests)
 
-- [ ] **Step 1: Append the failing tests**
+- [x] **Step 1: Append the failing tests**
 
 Append to `tests/unit/test_database.cpp`:
 
@@ -1346,7 +1346,7 @@ TEST(FunctionalApi, FreeFunctionsDelegateToDatabase) {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 ```bash
 cmake --build build -j
@@ -1355,7 +1355,7 @@ cmake --build build -j
 Expected: compile FAIL — `db.transaction`, working `db.begin`, and the free
 functions are missing.
 
-- [ ] **Step 3: Add `ScopedTransaction`, real `begin`, `transaction`, free functions**
+- [x] **Step 3: Add `ScopedTransaction`, real `begin`, `transaction`, free functions**
 
 In `include/halcyon/database.hpp`:
 
@@ -1480,7 +1480,7 @@ auto transaction(Database& db, Fn&& fn) {
 }
 ```
 
-- [ ] **Step 4: Build and run to verify pass**
+- [x] **Step 4: Build and run to verify pass**
 
 ```bash
 cmake --build build -j
@@ -1490,7 +1490,7 @@ ctest --test-dir build -R "Database|FunctionalApi" --output-on-failure
 Expected: all `Database.*`, `DatabaseTxn.*`, `FunctionalApi.*`, `DatabaseRetry.*`
 PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add include/halcyon/database.hpp tests/unit/test_database.cpp
@@ -1513,7 +1513,7 @@ explicit value rows.
 - Modify: `tests/CMakeLists.txt` (add `unit/test_database_batch.cpp`)
 - Test: `tests/unit/test_database_batch.cpp`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `tests/unit/test_database_batch.cpp`:
 
@@ -1616,12 +1616,12 @@ TEST(Batch, StopsAndReturnsErrorOnRowFailure) {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Add `unit/test_database_batch.cpp` to `tests/CMakeLists.txt`, build. Expected:
 compile FAIL — `Batch`, `batchOf`, `executeBatch` missing.
 
-- [ ] **Step 3: Add the batch type + `Connection::executeBatch`**
+- [x] **Step 3: Add the batch type + `Connection::executeBatch`**
 
 In `include/halcyon/connection.hpp`, add a method to `Connection` that prepares
 once and binds/executes per row (after the `queryAs` overloads):
@@ -1710,7 +1710,7 @@ error returns to the caller, who re-drives the batch):
 
 Add `#include <initializer_list>` to `database.hpp`.
 
-- [ ] **Step 4: Build and run to verify pass**
+- [x] **Step 4: Build and run to verify pass**
 
 ```bash
 cmake --build build -j
@@ -1719,7 +1719,7 @@ ctest --test-dir build -R "Batch" --output-on-failure
 
 Expected: all `Batch.*` PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add include/halcyon/database.hpp include/halcyon/connection.hpp \
@@ -1741,7 +1741,7 @@ concern; `executeAsync` returns `std::future<Result<std::int64_t>>`.
 - Modify: `tests/CMakeLists.txt` (add `unit/test_database_async.cpp`)
 - Test: `tests/unit/test_database_async.cpp`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `tests/unit/test_database_async.cpp`:
 
@@ -1798,12 +1798,12 @@ TEST(DatabaseAsync, QueryAsAsyncMaterializesRows) {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Add `unit/test_database_async.cpp` to `tests/CMakeLists.txt`, build. Expected:
 compile FAIL — no async methods.
 
-- [ ] **Step 3: Own an `Executor` and add async methods**
+- [x] **Step 3: Own an `Executor` and add async methods**
 
 In `include/halcyon/database.hpp`, add `#include "halcyon/async.hpp"` and
 `#include <future>`. Give `Database` a shared executor so copies share it:
@@ -1864,7 +1864,7 @@ before the last `Database` copy is destroyed):
 > materializes (`queryAsAsync<T>`) and offers `executeAsync`. Streaming-async is a
 > documented future extension.
 
-- [ ] **Step 4: Build and run to verify pass**
+- [x] **Step 4: Build and run to verify pass**
 
 ```bash
 cmake --build build -j
@@ -1873,7 +1873,7 @@ ctest --test-dir build -R "DatabaseAsync" --output-on-failure
 
 Expected: `DatabaseAsync.*` PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add include/halcyon/database.hpp tests/CMakeLists.txt \
@@ -1896,7 +1896,7 @@ tests (skipped without `HALCYON_TEST_DSN`).
   `examples/functional_usage.cpp`
 - Modify: `tests/integration/test_db2_roundtrip.cpp`
 
-- [ ] **Step 1: Extend the umbrella header**
+- [x] **Step 1: Extend the umbrella header**
 
 Edit `include/halcyon/halcyon.hpp` to add the facade headers (keep sorted):
 
@@ -1918,7 +1918,7 @@ Edit `include/halcyon/halcyon.hpp` to add the facade headers (keep sorted):
 #include "halcyon/detail/cli/db2_cli_driver.hpp"
 ```
 
-- [ ] **Step 2: Build the unit suite (umbrella compiles)**
+- [x] **Step 2: Build the unit suite (umbrella compiles)**
 
 ```bash
 cmake --build build -j
@@ -1927,7 +1927,7 @@ ctest --test-dir build --output-on-failure
 
 Expected: every unit test from Plans 1–4 PASSES.
 
-- [ ] **Step 3: Add examples**
+- [x] **Step 3: Add examples**
 
 Create `examples/oo_usage.cpp`:
 
@@ -2022,7 +2022,7 @@ if(HALCYON_BUILD_EXAMPLES)
 endif()
 ```
 
-- [ ] **Step 4: Add gated facade integration tests**
+- [x] **Step 4: Add gated facade integration tests**
 
 Append to `tests/integration/test_db2_roundtrip.cpp`:
 
@@ -2050,7 +2050,7 @@ TEST(Db2FacadeIntegration, QueryExecuteAndTransaction) {
 }
 ```
 
-- [ ] **Step 5: Build everything (no DB needed to compile)**
+- [x] **Step 5: Build everything (no DB needed to compile)**
 
 ```bash
 cmake -S . -B build -DHALCYON_BUILD_TESTS=ON \
@@ -2061,7 +2061,7 @@ cmake --build build -j
 Expected: unit + integration + example targets build. Facade integration test
 reports **skipped** without `HALCYON_TEST_DSN`.
 
-- [ ] **Step 6: Run the full unit suite**
+- [x] **Step 6: Run the full unit suite**
 
 ```bash
 ctest --test-dir build --output-on-failure
@@ -2069,7 +2069,7 @@ ctest --test-dir build --output-on-failure
 
 Expected: every unit test from Plans 1–4 PASSES.
 
-- [ ] **Step 7: Run integration against live Db2 (REQUIRED at verification)**
+- [x] **Step 7: Run integration against live Db2 (REQUIRED at verification)**
 
 ```bash
 docker compose -f docker/docker-compose.yml up -d
@@ -2082,7 +2082,7 @@ docker compose -f docker/docker-compose.yml down
 Expected: `Db2Integration.*`, `Db2PoolIntegration.*`, and
 `Db2FacadeIntegration.*` PASS against live Db2 (not skipped).
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add include/halcyon/halcyon.hpp CMakeLists.txt examples/ \
