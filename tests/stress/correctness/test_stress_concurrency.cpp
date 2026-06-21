@@ -105,3 +105,30 @@ TEST(WorkloadRunnerTest, DurationModeRunsAndReportsThroughput) {
     EXPECT_GT(r.ops, 0u);
     EXPECT_GT(r.throughput_per_sec(), 0.0);
 }
+
+#include <memory>
+
+#include "halcyon/database.hpp"
+#include "workloads.hpp"
+
+using halcyon::Database;
+using halcyon::stress::config_for;
+using halcyon::stress::make_pool_contention;
+using halcyon::stress::ScenarioId;
+
+TEST(StressScenario, PoolContentionStaysConsistent) {
+    auto fake = std::make_shared<ConcurrentFakeDriver>();
+    auto db = Database::open(fake, "dsn", config_for(ScenarioId::Pool, 8));
+    ASSERT_TRUE(db.ok()) << db.error().message;
+
+    Workload w = make_pool_contention(db.value());
+    RunConfig cfg;
+    cfg.threads = 32;                 // threads >> pool max
+    cfg.stop.total_iters = 20000;
+    RunReport r = run_workload(w, cfg);
+
+    EXPECT_FALSE(r.failed) << r.first_error;
+    EXPECT_LE(fake->peakInFlight.load(), 8);  // never more leases than max
+    EXPECT_EQ(db.value().pool().active_count(), 0u);
+    EXPECT_EQ(db.value().pool().idle_count(), db.value().pool().total_count());
+}
