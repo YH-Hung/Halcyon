@@ -17,6 +17,7 @@ add_executable(halcyon_unit_tests
     unit/test_parameters.cpp
     unit/test_result_set.cpp
     unit/test_connection.cpp
+    unit/test_statement_cache.cpp
     unit/test_reflect.cpp
     unit/test_sqlstate.cpp
     unit/test_retry.cpp
