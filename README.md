@@ -248,6 +248,23 @@ When built with the optional adapters, Halcyon emits the following Prometheus me
 
 OpenTelemetry spans: `halcyon.query`, `halcyon.execute`, `halcyon.transaction`, `halcyon.acquire`, `halcyon.reconnect` — with `db.system=db2`, `db.statement`, `db.rows_affected`, `error.sqlstate` attributes.
 
+## Developer guide
+
+Full API documentation is in [`docs/guide/`](docs/guide/index.md):
+
+| Page | Topic |
+|---|---|
+| [Getting Started](docs/guide/getting-started.md) | Opening a `Database`, first query, project setup |
+| [Error Handling](docs/guide/error-handling.md) | `Result<T>` vs exceptions, `ErrorCode`, error types |
+| [Querying](docs/guide/querying.md) | `query`, `queryAs`, `Row::as<>`, streaming vs materialized |
+| [Parameters & Types](docs/guide/parameters-and-types.md) | Anonymous `?`, named `:param`, type table, `HALCYON_REFLECT` |
+| [Connection Pool](docs/guide/connection-pool.md) | `PoolConfig` reference, sizing, timeouts, auto-retry |
+| [Transactions](docs/guide/transactions.md) | RAII `ScopedTransaction`, functional `transaction()` |
+| [Batch Operations](docs/guide/batch-operations.md) | `executeBatch`, `batchOf` for structs and tuples |
+| [Async](docs/guide/async.md) | `executeAsync`, `queryAsync`, lifetime rules |
+| [Observability](docs/guide/observability.md) | Prometheus metrics, OTel tracing, full metric reference |
+| [Advanced](docs/guide/advanced.md) | Statement cache, custom `TypeBinder<T>`, driver injection |
+
 ## Contributing
 
 - Follow TDD: write a failing test first, implement the minimum to pass, then commit.
