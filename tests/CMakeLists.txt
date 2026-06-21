@@ -42,3 +42,7 @@ gtest_discover_tests(halcyon_unit_tests)
 if(HALCYON_BUILD_INTEGRATION_TESTS)
     add_subdirectory(integration)
 endif()
+
+if(HALCYON_BUILD_STRESS_TESTS)
+    add_subdirectory(stress)
+endif()

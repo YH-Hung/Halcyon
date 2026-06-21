@@ -17,6 +17,10 @@ option(HALCYON_BUILD_INTEGRATION_TESTS "Build Dockerized Db2 integration tests" 
 option(HALCYON_BUILD_EXAMPLES "Build examples" OFF)
 option(HALCYON_WARNINGS_AS_ERRORS "Treat warnings as errors" OFF)
 option(HALCYON_BUILD_SMOKE_TEST "Add the install/find_package smoke test" ON)
+option(HALCYON_BUILD_STRESS_TESTS "Build concurrency stress + perf suite" OFF)
+set(HALCYON_SANITIZER "" CACHE STRING
+    "Sanitizer for stress targets: thread|address|undefined (empty = none)")
+set_property(CACHE HALCYON_SANITIZER PROPERTY STRINGS "" thread address undefined)
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 find_package(DB2CLI REQUIRED)
