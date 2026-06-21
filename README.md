@@ -229,4 +229,4 @@ OpenTelemetry spans: `halcyon.query`, `halcyon.execute`, `halcyon.transaction`, 
 
 ## License
 
-*(License to be determined.)*
+Halcyon is open-source software licensed under the [BSD 3-Clause License](LICENSE).
