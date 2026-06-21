@@ -22,7 +22,10 @@ struct Stop {
 struct RunConfig {
     std::size_t threads = 1;
     Stop stop;
-    std::size_t warmup_iters = 0;  // perf: discarded before timing starts
+    // perf: a warmup phase runs before timing starts and is discarded (spec §5.4).
+    // Iteration mode uses warmup_iters; duration mode uses warmup_duration.
+    std::size_t warmup_iters = 0;
+    std::chrono::milliseconds warmup_duration{0};
     std::uint64_t seed = 0;
 };
 
@@ -40,19 +43,32 @@ struct WorkerCtx {
             error = std::move(msg);
         }
     }
+    // Count a tolerated (non-fatal) error this op encountered — e.g. a pool
+    // acquire-timeout or a genuinely-exhausted retriable error. Drives the perf
+    // report's error column and the no-starvation soft gate. Reset to 0 after the
+    // warmup phase so only the timed window is reported.
+    void note_error() { ++errors; }
+
     bool failed = false;
     std::string error;
+    std::uint64_t errors = 0;
 };
 
 struct RunReport {
     std::string name;
     std::size_t threads = 0;
     std::uint64_t ops = 0;
+    std::uint64_t errors = 0;  // tolerated, non-fatal errors over the timed window
     std::chrono::nanoseconds wall{0};
     LatencyHistogram hist;
     bool failed = false;
     std::string first_error;
 
+    // Fraction of timed ops that hit a tolerated error (0 when no ops ran).
+    double error_rate() const {
+        return ops > 0 ? static_cast<double>(errors) / static_cast<double>(ops)
+                       : 0.0;
+    }
     double throughput_per_sec() const {
         const double secs =
             std::chrono::duration<double>(wall).count();

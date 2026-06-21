@@ -82,7 +82,9 @@ inline Workload make_pool_contention(Database& db) {
         if (!pc.ok()) {
             if (pc.error().code != ErrorCode::Pool)
                 ctx.fail("unexpected acquire error: " + pc.error().message);
-            return;  // timeout under contention is acceptable
+            else
+                ctx.note_error();  // tolerated acquire-timeout under contention
+            return;
         }
         auto r = pc.value()->queryAs<One>(select_n(7));
         if (!r.ok()) {
@@ -147,6 +149,8 @@ inline Workload make_reconnect_faults(Database& db,
             // A non-retriable error means recovery corrupted the path: a failure.
             if (!r.error().retriable)
                 ctx.fail("non-retriable error surfaced: " + r.error().message);
+            else
+                ctx.note_error();  // tolerated: bounded retry genuinely exhausted
             return;
         }
         if (r.value().size() != 1 || r.value()[0].v != 7) {
