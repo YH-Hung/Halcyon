@@ -79,6 +79,35 @@ Options parse(int argc, char** argv) {
     return o;
 }
 
+// Captures the pool/cache counters Halcyon emits so the report can show reconnects
+// and cache hit-rate for either backend. Thread-safe (called concurrently from
+// every leased connection). Enabling any sink turns on the observability hot path,
+// so reported throughput includes a small, consistent instrumentation overhead.
+struct PerfCountersSink final : obs::MetricsSink {
+    std::atomic<long> reconnects{0}, hits{0}, misses{0};
+    void counter(std::string_view name, double value,
+                 const obs::Labels& labels) override {
+        const auto n = static_cast<long>(value);
+        if (name == "halcyon_reconnects_total") {
+            reconnects.fetch_add(n, std::memory_order_relaxed);
+        } else if (name == "halcyon_stmt_cache_total") {
+            for (const auto& kv : labels) {
+                if (kv.first != "result") continue;
+                if (kv.second == "hit") hits.fetch_add(n, std::memory_order_relaxed);
+                else if (kv.second == "miss") misses.fetch_add(n, std::memory_order_relaxed);
+            }
+        }
+    }
+    void histogram(std::string_view, double, const obs::Labels&) override {}
+    void gauge(std::string_view, double, const obs::Labels&) override {}
+    // Cache hit-rate in [0,1]; -1 when the scenario does no cache lookups.
+    double hit_rate() const {
+        const long h = hits.load(), m = misses.load();
+        return (h + m) > 0 ? static_cast<double>(h) / static_cast<double>(h + m)
+                           : -1.0;
+    }
+};
+
 struct ScenarioSpec { ScenarioId id; const char* name; };
 const std::vector<ScenarioSpec> kScenarios = {
     {ScenarioId::Pool, "pool"},   {ScenarioId::Executor, "executor"},
@@ -124,10 +153,13 @@ int main(int argc, char** argv) {
     };
 
     const bool csv = (o.format == "csv");
+    // In CSV mode the human-readable gate lines go to stderr so stdout stays pure
+    // CSV (`--format=csv > sweep.csv` is clean); in table mode they print inline.
+    std::ostream& gate_out = csv ? std::cerr : std::cout;
     std::cout << (csv ? "scenario,threads,pool_max,throughput_ops_s,p50_us,p95_us,"
-                        "p99_us,max_us,ops,errors\n"
-                      : "scenario        threads pool  thr(ops/s)   p50us   p99us"
-                        "   maxus      ops      err\n");
+                        "p99_us,max_us,ops,errors,reconnects,cache_hit_rate\n"
+                      : "scenario        threads pool  thr(ops/s)   p50us   p95us"
+                        "   p99us   maxus      ops      err  reconn   hit%\n");
 
     int exit_code = 0;
     for (const auto& sc : kScenarios) {
@@ -138,10 +170,15 @@ int main(int argc, char** argv) {
         double thr_at_min = 0.0, thr_peak = 0.0;
         double worst_lat_ratio = 0.0, worst_err_rate = 0.0;
         for (std::size_t t : o.threads) {
-            // Build a fresh backend per cell so counters/caches start clean.
+            // Build a fresh backend + counter sink per cell so counts start clean.
+            // The sink populates the reconnects/cache-hit-rate report columns (and
+            // works for the live backend too); enabling it turns on the
+            // observability hot path, a small consistent overhead on throughput.
             std::shared_ptr<ConcurrentFakeDriver> fake;
+            auto sink = std::make_shared<PerfCountersSink>();
             Result<Database> dbr = [&] {
                 PoolConfig cfg = config_for(sc.id, o.pool_max);
+                cfg.observability.metrics = sink;
                 if (o.backend == "live")
                     return Database::open(*dsn, cfg);
                 fake = std::make_shared<ConcurrentFakeDriver>();
@@ -178,19 +215,28 @@ int main(int argc, char** argv) {
                     std::max(worst_lat_ratio, r.p99_us() / r.p50_us());
             worst_err_rate = std::max(worst_err_rate, r.error_rate());
 
+            const long reconn = sink->reconnects.load();
+            const double hr = sink->hit_rate();  // -1 when no cache lookups
+
             if (csv) {
                 std::cout << sc.name << ',' << t << ',' << o.pool_max << ','
                           << thr << ',' << r.p50_us() << ',' << r.p95_us() << ','
                           << r.p99_us() << ',' << r.max_us() << ',' << r.ops << ','
-                          << r.errors << '\n';
+                          << r.errors << ',' << reconn << ',' << hr << '\n';
             } else {
-                char line[256];
-                std::snprintf(line, sizeof(line),
-                              "%-15s %7zu %4zu %12.1f %7.1f %7.1f %8.1f %9llu %8llu",
-                              sc.name, t, o.pool_max, thr, r.p50_us(), r.p99_us(),
-                              r.max_us(),
-                              static_cast<unsigned long long>(r.ops),
-                              static_cast<unsigned long long>(r.errors));
+                char hitbuf[16];
+                if (hr < 0.0) std::snprintf(hitbuf, sizeof(hitbuf), "  n/a");
+                else std::snprintf(hitbuf, sizeof(hitbuf), "%5.1f", hr * 100.0);
+                char line[320];
+                std::snprintf(
+                    line, sizeof(line),
+                    "%-15s %7zu %4zu %12.1f %7.1f %7.1f %7.1f %8.1f %9llu %8llu "
+                    "%7lld %s",
+                    sc.name, t, o.pool_max, thr, r.p50_us(), r.p95_us(),
+                    r.p99_us(), r.max_us(),
+                    static_cast<unsigned long long>(r.ops),
+                    static_cast<unsigned long long>(r.errors),
+                    static_cast<long long>(reconn), hitbuf);
                 std::cout << line << (r.failed ? "  FAILED" : "") << "\n";
             }
             if (r.failed) exit_code = 1;
@@ -204,30 +250,28 @@ int main(int argc, char** argv) {
             // mutex. Needs at least two thread counts to compare base vs peak.
             if (o.threads.size() > 1) {
                 const bool ok = thr_peak >= o.scaling_mult * thr_at_min;
-                std::cout << "  [gate] " << sc.name << " scaling "
-                          << (ok ? "PASS" : "WARN") << " (peak " << thr_peak
-                          << " vs base " << thr_at_min << " ops/s, need "
-                          << o.scaling_mult << "x)\n";
+                gate_out << "  [gate] " << sc.name << " scaling "
+                         << (ok ? "PASS" : "WARN") << " (peak " << thr_peak
+                         << " vs base " << thr_at_min << " ops/s, need "
+                         << o.scaling_mult << "x)\n";
                 if (!ok && o.strict) exit_code = 1;
             }
             // Latency sanity: p99 within a configurable multiple of p50 (catches
             // lock-convoy / pathological tail behaviour).
             {
                 const bool ok = worst_lat_ratio <= o.latency_mult;
-                std::cout << "  [gate] " << sc.name << " latency "
-                          << (ok ? "PASS" : "WARN") << " (worst p99/p50 "
-                          << worst_lat_ratio << ", max " << o.latency_mult
-                          << ")\n";
+                gate_out << "  [gate] " << sc.name << " latency "
+                         << (ok ? "PASS" : "WARN") << " (worst p99/p50 "
+                         << worst_lat_ratio << ", max " << o.latency_mult << ")\n";
                 if (!ok && o.strict) exit_code = 1;
             }
             // No starvation: tolerated error rate (mainly acquire-timeouts under
             // contention) stays below a configurable ceiling.
             {
                 const bool ok = worst_err_rate <= o.starvation_max;
-                std::cout << "  [gate] " << sc.name << " no-starvation "
-                          << (ok ? "PASS" : "WARN") << " (worst err-rate "
-                          << worst_err_rate << ", max " << o.starvation_max
-                          << ")\n";
+                gate_out << "  [gate] " << sc.name << " no-starvation "
+                         << (ok ? "PASS" : "WARN") << " (worst err-rate "
+                         << worst_err_rate << ", max " << o.starvation_max << ")\n";
                 if (!ok && o.strict) exit_code = 1;
             }
         }
