@@ -58,6 +58,45 @@ TEST(ResultSetTest, TryAsReturnsErrorOnArityMismatch) {
     EXPECT_EQ(bad.error().code, halcyon::ErrorCode::Mapping);
 }
 
+TEST(ResultSetTest, MidStreamFetchErrorIsSurfacedNotSilentlyDropped) {
+    MockCliDriver driver;
+    auto conn = driver.connect({"x"}).value();
+    driver.resultSets.push_back(usersGrid());  // 2 rows available
+    halcyon::Error e;
+    e.code = halcyon::ErrorCode::Connection;
+    e.message = "boom";
+    e.retriable = true;
+    driver.fetchError = e;
+    driver.failFetchOnCall = 2;  // first row fetches OK; second fetch errors
+    auto stmt = driver.prepare(conn, "SELECT id, name FROM u").value();
+    ASSERT_TRUE(driver.execute(stmt).ok());
+
+    auto rs = ResultSet::create_borrowing(driver, stmt).value();
+    int rows = 0;
+    for (auto& row : rs) {
+        (void)row;
+        ++rows;
+    }
+    EXPECT_EQ(rows, 1);  // only the first row arrives before the error
+    // The mid-stream error must be reported, not collapsed into end-of-cursor.
+    ASSERT_FALSE(rs.ok());
+    ASSERT_TRUE(rs.error().has_value());
+    EXPECT_EQ(rs.error()->code, halcyon::ErrorCode::Connection);
+    EXPECT_EQ(rs.error()->message, "boom");
+}
+
+TEST(ResultSetTest, CleanIterationLeavesNoError) {
+    MockCliDriver driver;
+    auto conn = driver.connect({"x"}).value();
+    driver.resultSets.push_back(usersGrid());
+    auto stmt = driver.prepare(conn, "SELECT id, name FROM u").value();
+    ASSERT_TRUE(driver.execute(stmt).ok());
+    auto rs = ResultSet::create_borrowing(driver, stmt).value();
+    for (auto& row : rs) (void)row;
+    EXPECT_TRUE(rs.ok());
+    EXPECT_FALSE(rs.error().has_value());
+}
+
 TEST(ResultSetTest, AsThrowsMappingExceptionOnNullIntoNonOptional) {
     MockCliDriver driver;
     auto conn = driver.connect({"x"}).value();

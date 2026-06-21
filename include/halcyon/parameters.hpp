@@ -50,7 +50,11 @@ struct PreparedSql {
 
 // Rewrites ':name' placeholders to '?' in appearance order, resolving each
 // against p. A repeated name binds its value again. '::' is treated literally.
-// Note (v1 limitation): this scanner does not skip string/comment literals.
+//
+// The scanner is literal-aware: text inside '...' string literals, "..."
+// delimited identifiers (both honouring the SQL doubled-quote escape), -- line
+// comments, and /* */ block comments is copied through verbatim, so a ':name'
+// that appears there is never mistaken for a placeholder.
 inline Result<PreparedSql> bind_named(const std::string& sql, const params& p) {
     auto find = [&](const std::string& name) -> const detail::cli::Value* {
         for (const auto& it : p.items())
@@ -60,15 +64,65 @@ inline Result<PreparedSql> bind_named(const std::string& sql, const params& p) {
 
     PreparedSql out;
     out.sql.reserve(sql.size());
-    for (std::size_t i = 0; i < sql.size();) {
-        char c = sql[i];
-        if (c == ':' && i + 1 < sql.size() && sql[i + 1] == ':') {
+    const std::size_t n = sql.size();
+    for (std::size_t i = 0; i < n;) {
+        const char c = sql[i];
+
+        // Quoted string literal / delimited identifier: copy through to the
+        // matching close quote, treating a doubled quote as an escaped quote
+        // that stays inside the literal.
+        if (c == '\'' || c == '"') {
+            const char quote = c;
+            out.sql += c;
+            ++i;
+            while (i < n) {
+                out.sql += sql[i];
+                if (sql[i] == quote) {
+                    if (i + 1 < n && sql[i + 1] == quote) {
+                        out.sql += sql[i + 1];  // doubled quote = escaped
+                        i += 2;
+                        continue;
+                    }
+                    ++i;
+                    break;
+                }
+                ++i;
+            }
+            continue;
+        }
+
+        // -- line comment: copy through to (but not including) the newline.
+        if (c == '-' && i + 1 < n && sql[i + 1] == '-') {
+            while (i < n && sql[i] != '\n') {
+                out.sql += sql[i];
+                ++i;
+            }
+            continue;
+        }
+
+        // /* block comment */: copy through to the closing */ (or end of input).
+        if (c == '/' && i + 1 < n && sql[i + 1] == '*') {
+            out.sql += "/*";
+            i += 2;
+            while (i < n) {
+                if (sql[i] == '*' && i + 1 < n && sql[i + 1] == '/') {
+                    out.sql += "*/";
+                    i += 2;
+                    break;
+                }
+                out.sql += sql[i];
+                ++i;
+            }
+            continue;
+        }
+
+        if (c == ':' && i + 1 < n && sql[i + 1] == ':') {
             out.sql += "::";
             i += 2;
             continue;
         }
         const bool starts_name =
-            c == ':' && i + 1 < sql.size() &&
+            c == ':' && i + 1 < n &&
             (std::isalpha(static_cast<unsigned char>(sql[i + 1])) ||
              sql[i + 1] == '_');
         if (!starts_name) {
@@ -77,9 +131,8 @@ inline Result<PreparedSql> bind_named(const std::string& sql, const params& p) {
             continue;
         }
         std::size_t j = i + 1;
-        while (j < sql.size() &&
-               (std::isalnum(static_cast<unsigned char>(sql[j])) ||
-                sql[j] == '_')) {
+        while (j < n && (std::isalnum(static_cast<unsigned char>(sql[j])) ||
+                         sql[j] == '_')) {
             ++j;
         }
         std::string name = sql.substr(i + 1, j - (i + 1));

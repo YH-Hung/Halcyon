@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstring>
 #include <map>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -62,9 +63,15 @@ public:
 
     Result<ConnectionHandle> connect(const ConnectionParams& params) override {
         SQLHDBC dbc = SQL_NULL_HANDLE;
-        if (!cli_ok(SQLAllocHandle(SQL_HANDLE_DBC, env_, &dbc)))
-            return make_error(SQL_HANDLE_ENV, env_, ErrorCode::Connection,
-                              "alloc dbc");
+        {
+            // Allocating a DBC touches the shared env handle; serialize it.
+            std::lock_guard<std::mutex> lk(mu_);
+            if (!cli_ok(SQLAllocHandle(SQL_HANDLE_DBC, env_, &dbc)))
+                return make_error(SQL_HANDLE_ENV, env_, ErrorCode::Connection,
+                                  "alloc dbc");
+        }
+        // The dbc is private to this thread until it is published into conns_
+        // below, so the (potentially slow, network-bound) connect runs unlocked.
         std::string dsn = params.connectionString;
         SQLCHAR out[1024];
         SQLSMALLINT outLen = 0;
@@ -78,25 +85,31 @@ public:
             SQLFreeHandle(SQL_HANDLE_DBC, dbc);
             return e;
         }
+        std::lock_guard<std::mutex> lk(mu_);
         auto h = static_cast<ConnectionHandle>(++nextConn_);
         conns_[h] = dbc;
         return h;
     }
 
     Result<void> disconnect(ConnectionHandle handle) override {
-        auto it = conns_.find(handle);
-        if (it == conns_.end()) return Result<void>();
-        SQLDisconnect(it->second);
-        SQLFreeHandle(SQL_HANDLE_DBC, it->second);
-        conns_.erase(it);
+        SQLHDBC dbc;
+        {
+            std::lock_guard<std::mutex> lk(mu_);
+            auto it = conns_.find(handle);
+            if (it == conns_.end()) return Result<void>();
+            dbc = it->second;
+            conns_.erase(it);
+        }
+        SQLDisconnect(dbc);
+        SQLFreeHandle(SQL_HANDLE_DBC, dbc);
         return Result<void>();
     }
 
     Result<bool> isAlive(ConnectionHandle handle) override {
-        auto it = conns_.find(handle);
-        if (it == conns_.end()) return false;
+        SQLHDBC dbc = conn_handle(handle);
+        if (dbc == SQL_NULL_HANDLE) return false;
         SQLHSTMT s = SQL_NULL_HANDLE;
-        if (!cli_ok(SQLAllocHandle(SQL_HANDLE_STMT, it->second, &s))) return false;
+        if (!cli_ok(SQLAllocHandle(SQL_HANDLE_STMT, dbc, &s))) return false;
         std::string sql = "SELECT 1 FROM SYSIBM.SYSDUMMY1";
         SQLRETURN rc = SQLExecDirect(s, reinterpret_cast<SQLCHAR*>(sql.data()),
                                      SQL_NTS);
@@ -107,16 +120,16 @@ public:
 
     Result<StatementHandle> prepare(ConnectionHandle conn,
                                     const std::string& sql) override {
-        auto it = conns_.find(conn);
-        if (it == conns_.end()) {
+        SQLHDBC dbc = conn_handle(conn);
+        if (dbc == SQL_NULL_HANDLE) {
             Error e;
             e.code = ErrorCode::Connection;
             e.message = "unknown connection handle";
             return e;
         }
         SQLHSTMT s = SQL_NULL_HANDLE;
-        if (!cli_ok(SQLAllocHandle(SQL_HANDLE_STMT, it->second, &s)))
-            return make_error(SQL_HANDLE_DBC, it->second, ErrorCode::Unknown,
+        if (!cli_ok(SQLAllocHandle(SQL_HANDLE_STMT, dbc, &s)))
+            return make_error(SQL_HANDLE_DBC, dbc, ErrorCode::Unknown,
                               "alloc stmt");
         std::string mutableSql = sql;
         SQLRETURN rc = SQLPrepare(
@@ -127,6 +140,7 @@ public:
             SQLFreeHandle(SQL_HANDLE_STMT, s);
             return e;
         }
+        std::lock_guard<std::mutex> lk(mu_);
         auto h = static_cast<StatementHandle>(++nextStmt_);
         stmts_[h] = StmtState{s, {}};
         return h;
@@ -134,7 +148,9 @@ public:
 
     Result<void> bindParams(StatementHandle stmt,
                             const std::vector<Value>& params) override {
-        auto& st = stmts_.at(stmt);
+        StmtState* stp = stmt_state(stmt);
+        if (!stp) return unknown_stmt();
+        StmtState& st = *stp;
         st.bound.clear();
         st.bound.resize(params.size());
         for (std::size_t i = 0; i < params.size(); ++i) {
@@ -195,53 +211,64 @@ public:
     }
 
     Result<std::int64_t> execute(StatementHandle stmt) override {
-        auto& st = stmts_.at(stmt);
-        SQLRETURN rc = SQLExecute(st.handle);
+        StmtState* st = stmt_state(stmt);
+        if (!st) return unknown_stmt();
+        SQLHSTMT h = st->handle;
+        SQLRETURN rc = SQLExecute(h);
         if (!cli_ok(rc) && rc != SQL_NO_DATA)
-            return make_error(SQL_HANDLE_STMT, st.handle, ErrorCode::Unknown,
+            return make_error(SQL_HANDLE_STMT, h, ErrorCode::Unknown,
                               "SQLExecute failed");
         SQLLEN rows = 0;
-        SQLRowCount(st.handle, &rows);
+        SQLRowCount(h, &rows);
         return static_cast<std::int64_t>(rows < 0 ? 0 : rows);
     }
 
     Result<std::size_t> columnCount(StatementHandle stmt) override {
+        StmtState* st = stmt_state(stmt);
+        if (!st) return unknown_stmt();
+        SQLHSTMT h = st->handle;
         SQLSMALLINT n = 0;
-        if (!cli_ok(SQLNumResultCols(stmts_.at(stmt).handle, &n)))
-            return make_error(SQL_HANDLE_STMT, stmts_.at(stmt).handle,
-                              ErrorCode::Unknown, "SQLNumResultCols failed");
+        if (!cli_ok(SQLNumResultCols(h, &n)))
+            return make_error(SQL_HANDLE_STMT, h, ErrorCode::Unknown,
+                              "SQLNumResultCols failed");
         return static_cast<std::size_t>(n < 0 ? 0 : n);
     }
 
     Result<std::string> columnName(StatementHandle stmt,
                                    std::size_t index) override {
+        StmtState* st = stmt_state(stmt);
+        if (!st) return unknown_stmt();
+        SQLHSTMT h = st->handle;
         SQLCHAR name[256] = {0};
         SQLSMALLINT nameLen = 0, sqlType = 0, nullable = 0;
         SQLULEN colSize = 0;
         SQLSMALLINT scale = 0;
         SQLRETURN rc =
-            SQLDescribeCol(stmts_.at(stmt).handle,
-                           static_cast<SQLUSMALLINT>(index + 1), name,
+            SQLDescribeCol(h, static_cast<SQLUSMALLINT>(index + 1), name,
                            sizeof(name), &nameLen, &sqlType, &colSize, &scale,
                            &nullable);
         if (!cli_ok(rc))
-            return make_error(SQL_HANDLE_STMT, stmts_.at(stmt).handle,
-                              ErrorCode::Unknown, "SQLDescribeCol failed");
+            return make_error(SQL_HANDLE_STMT, h, ErrorCode::Unknown,
+                              "SQLDescribeCol failed");
         return std::string(reinterpret_cast<const char*>(name),
                            static_cast<std::size_t>(nameLen));
     }
 
     Result<bool> fetch(StatementHandle stmt) override {
-        SQLRETURN rc = SQLFetch(stmts_.at(stmt).handle);
+        StmtState* st = stmt_state(stmt);
+        if (!st) return unknown_stmt();
+        SQLRETURN rc = SQLFetch(st->handle);
         if (rc == SQL_NO_DATA) return false;
         if (!cli_ok(rc))
-            return make_error(SQL_HANDLE_STMT, stmts_.at(stmt).handle,
-                              ErrorCode::Unknown, "SQLFetch failed");
+            return make_error(SQL_HANDLE_STMT, st->handle, ErrorCode::Unknown,
+                              "SQLFetch failed");
         return true;
     }
 
     Result<Value> getColumn(StatementHandle stmt, std::size_t index) override {
-        SQLHSTMT h = stmts_.at(stmt).handle;
+        StmtState* st = stmt_state(stmt);
+        if (!st) return unknown_stmt();
+        SQLHSTMT h = st->handle;
         SQLUSMALLINT col = static_cast<SQLUSMALLINT>(index + 1);
         SQLCHAR name[1] = {0};
         SQLSMALLINT nameLen = 0, sqlType = 0, nullable = 0;
@@ -277,6 +304,13 @@ public:
                 if (ind == SQL_NULL_DATA) return Value{Null{}};
                 return Value{v};
             }
+            case SQL_BINARY:
+            case SQL_VARBINARY:
+            case SQL_LONGVARBINARY:
+            case SQL_BLOB:
+                // Raw bytes: read as SQL_C_BINARY so embedded NULs survive
+                // (a SQL_C_CHAR read would truncate at the first 0x00).
+                return get_binary(h, col);
             default:
                 // CHAR/VARCHAR/DECIMAL/NUMERIC/TIMESTAMP/DATE/TIME → UTF-8 string.
                 return get_string(h, col);
@@ -284,22 +318,27 @@ public:
     }
 
     Result<void> finalize(StatementHandle stmt) override {
-        auto it = stmts_.find(stmt);
-        if (it == stmts_.end()) return Result<void>();
-        SQLFreeHandle(SQL_HANDLE_STMT, it->second.handle);
-        stmts_.erase(it);
+        SQLHSTMT h;
+        {
+            std::lock_guard<std::mutex> lk(mu_);
+            auto it = stmts_.find(stmt);
+            if (it == stmts_.end()) return Result<void>();
+            h = it->second.handle;
+            stmts_.erase(it);
+        }
+        SQLFreeHandle(SQL_HANDLE_STMT, h);
         return Result<void>();
     }
 
     Result<void> setAutoCommit(ConnectionHandle conn, bool enabled) override {
-        auto it = conns_.find(conn);
-        if (it == conns_.end()) return unknown_conn();
+        SQLHDBC dbc = conn_handle(conn);
+        if (dbc == SQL_NULL_HANDLE) return unknown_conn();
         SQLPOINTER v = reinterpret_cast<SQLPOINTER>(static_cast<SQLLEN>(
             enabled ? SQL_AUTOCOMMIT_ON : SQL_AUTOCOMMIT_OFF));
-        SQLRETURN rc = SQLSetConnectAttr(it->second, SQL_ATTR_AUTOCOMMIT, v,
+        SQLRETURN rc = SQLSetConnectAttr(dbc, SQL_ATTR_AUTOCOMMIT, v,
                                          SQL_IS_INTEGER);
         if (!cli_ok(rc))
-            return make_error(SQL_HANDLE_DBC, it->second, ErrorCode::Unknown,
+            return make_error(SQL_HANDLE_DBC, dbc, ErrorCode::Unknown,
                               "SQLSetConnectAttr(AUTOCOMMIT) failed");
         return Result<void>();
     }
@@ -325,14 +364,35 @@ private:
     Result<void> unknown_conn() {
         return make_conn_error("unknown connection handle");
     }
+    static Error unknown_stmt() {
+        Error e;
+        e.code = ErrorCode::Unknown;
+        e.message = "unknown statement handle";
+        return e;
+    }
+
+    // Locked lookups: copy a handle / grab a stable StmtState pointer under the
+    // mutex, then operate on it unlocked. Map nodes are address-stable and a
+    // statement/connection is single-owner per lease, so the returned handle is
+    // safe to use without the lock while other threads work on other handles.
+    SQLHDBC conn_handle(ConnectionHandle h) {
+        std::lock_guard<std::mutex> lk(mu_);
+        auto it = conns_.find(h);
+        return it == conns_.end() ? SQL_NULL_HANDLE : it->second;
+    }
+    StmtState* stmt_state(StatementHandle h) {
+        std::lock_guard<std::mutex> lk(mu_);
+        auto it = stmts_.find(h);
+        return it == stmts_.end() ? nullptr : &it->second;
+    }
+
     Result<void> end_tran(ConnectionHandle conn, SQLSMALLINT how,
                           const char* context) {
-        auto it = conns_.find(conn);
-        if (it == conns_.end()) return unknown_conn();
-        SQLRETURN rc = SQLEndTran(SQL_HANDLE_DBC, it->second, how);
+        SQLHDBC dbc = conn_handle(conn);
+        if (dbc == SQL_NULL_HANDLE) return unknown_conn();
+        SQLRETURN rc = SQLEndTran(SQL_HANDLE_DBC, dbc, how);
         if (!cli_ok(rc))
-            return make_error(SQL_HANDLE_DBC, it->second, ErrorCode::Unknown,
-                              context);
+            return make_error(SQL_HANDLE_DBC, dbc, ErrorCode::Unknown, context);
         return Result<void>();
     }
 
@@ -359,7 +419,40 @@ private:
         return Value{out};
     }
 
+    // Reads a (possibly long) binary column by looping SQLGetData with
+    // SQL_C_BINARY. Unlike get_string there is no NUL terminator: the indicator
+    // gives the byte length, and on truncation (SQL_SUCCESS_WITH_INFO) it reports
+    // the full remaining size (>= buffer) or SQL_NO_TOTAL, so the whole buffer was
+    // filled — take all of it and loop until a SQL_SUCCESS chunk.
+    Result<Value> get_binary(SQLHSTMT h, SQLUSMALLINT col) {
+        std::vector<std::byte> out;
+        char chunk[4096];
+        SQLLEN ind = 0;
+        for (;;) {
+            SQLRETURN rc = SQLGetData(h, col, SQL_C_BINARY, chunk, sizeof(chunk),
+                                      &ind);
+            if (rc == SQL_NO_DATA) break;
+            if (!cli_ok(rc))
+                return make_error(SQL_HANDLE_STMT, h, ErrorCode::Unknown,
+                                  "SQLGetData binary failed");
+            if (ind == SQL_NULL_DATA) return Value{Null{}};
+            std::size_t copied =
+                (ind == SQL_NO_TOTAL || ind >= static_cast<SQLLEN>(sizeof(chunk)))
+                    ? sizeof(chunk)
+                    : static_cast<std::size_t>(ind);
+            const auto* bytes = reinterpret_cast<const std::byte*>(chunk);
+            out.insert(out.end(), bytes, bytes + copied);
+            if (rc == SQL_SUCCESS) break;  // last chunk delivered in full
+        }
+        return Value{std::move(out)};
+    }
+
     SQLHENV env_ = SQL_NULL_HANDLE;
+    // Guards the bookkeeping below (the handle maps + counters), which are shared
+    // by every pooled connection through this one driver. Held only around map
+    // lookups/inserts/erasures and counter bumps — never across a CLI round-trip
+    // — so distinct connections still execute concurrently.
+    std::mutex mu_;
     std::map<ConnectionHandle, SQLHDBC> conns_;
     std::map<StatementHandle, StmtState> stmts_;
     std::uint64_t nextConn_ = 0;

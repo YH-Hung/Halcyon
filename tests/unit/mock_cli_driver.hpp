@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <deque>
+#include <functional>
 #include <map>
 #include <string>
 #include <vector>
@@ -46,6 +47,10 @@ public:
     std::deque<Error> executeErrors;
     std::deque<ScriptedRows> resultSets;     // execute() attaches the next one
     std::deque<std::int64_t> execRowCounts;  // execute() returns the next one
+
+    // Optional gate invoked at the top of every execute(); lets a test block a
+    // worker thread mid-call to make async/lifetime ordering deterministic.
+    std::function<void()> executeHook;
 
     std::vector<std::string> preparedSql;
     std::map<StatementHandle, StmtState> statements;
@@ -100,6 +105,7 @@ public:
     }
 
     Result<std::int64_t> execute(StatementHandle stmt) override {
+        if (executeHook) executeHook();
         if (!executeErrors.empty()) {
             Error e = executeErrors.front();
             executeErrors.pop_front();
@@ -132,7 +138,15 @@ public:
         return Result<std::string>(cols[index]);
     }
 
+    // --- fetch error injection ---
+    Error fetchError;
+    int failFetchOnCall = 0;  // 1-based fetch() call index to fail at; 0 = never
+    int fetchCalls = 0;
+
     Result<bool> fetch(StatementHandle stmt) override {
+        ++fetchCalls;
+        if (failFetchOnCall != 0 && fetchCalls == failFetchOnCall)
+            return Result<bool>(fetchError);
         auto& s = statements.at(stmt);
         ++s.position;
         return Result<bool>(s.position <

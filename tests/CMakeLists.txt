@@ -27,7 +27,8 @@ add_executable(halcyon_unit_tests
     unit/test_database.cpp
     unit/test_database_retry.cpp
     unit/test_database_batch.cpp
-    unit/test_database_async.cpp)
+    unit/test_database_async.cpp
+    unit/test_observability.cpp)
 
 target_link_libraries(halcyon_unit_tests
     PRIVATE halcyon::halcyon GTest::gtest_main Threads::Threads)

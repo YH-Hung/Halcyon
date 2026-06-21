@@ -13,6 +13,8 @@
 #include "halcyon/connection.hpp"
 #include "halcyon/detail/cli/driver.hpp"
 #include "halcyon/error.hpp"
+#include "halcyon/observability/config.hpp"
+#include "halcyon/observability/instrument.hpp"
 #include "halcyon/result.hpp"
 #include "halcyon/retry.hpp"
 
@@ -31,6 +33,7 @@ struct PoolConfig {
     std::function<Clock::time_point()> now = [] { return Clock::now(); };
     std::chrono::milliseconds maintenanceInterval{1000};
     bool startMaintenanceThread = true;
+    obs::ObservabilityConfig observability{};      // default-null = no-op
 };
 
 namespace detail {
@@ -104,6 +107,11 @@ public:
             if (!c.ok()) return c.error();
             pool->add_idle_slot(std::move(c.value()));
         }
+        // Emit the initial pool gauge once after warmup (single-threaded here;
+        // no other thread can observe the pool yet, so no lock is needed).
+        PendingMetrics pm;
+        pool->snapshot_gauge_locked(pm);
+        pool->flush_metrics(pm);
         if (pool->config_.startMaintenanceThread) pool->start_maintenance();
         return pool;
     }
@@ -127,37 +135,61 @@ public:
     }
 
     Result<PooledConnection> acquire() {
-        std::unique_lock<std::mutex> lk(mu_);
-        const auto deadline = std::chrono::steady_clock::now() + config_.acquireTimeout;
-        for (;;) {
-            if (!idle_.empty()) {
-                detail::PoolSlot* s = idle_.front();
-                idle_.pop_front();
-                if (config_.validateOnAcquire) {
-                    auto v = ensure_alive_locked(s);
-                    if (!v.ok()) {
-                        remove_slot_locked(s);
-                        return v.error();
+        // Time the wait and trace the acquire (both no-ops unless instrumented).
+        // startSpan runs before the lock; all metric/sink emission is deferred to
+        // flush_metrics() after the lock is released (see PendingMetrics).
+        detail::obs::Timer timer;
+        obs::ScopedSpan span = has_tracer_
+                                   ? obs::ScopedSpan(tracer_->startSpan(
+                                         "halcyon.acquire", {}))
+                                   : obs::ScopedSpan();
+        PendingMetrics pm;
+        bool timed_out = false;
+        Result<PooledConnection> result = [&]() -> Result<PooledConnection> {
+            std::unique_lock<std::mutex> lk(mu_);
+            const auto deadline =
+                std::chrono::steady_clock::now() + config_.acquireTimeout;
+            for (;;) {
+                if (!idle_.empty()) {
+                    detail::PoolSlot* s = idle_.front();
+                    idle_.pop_front();
+                    if (config_.validateOnAcquire) {
+                        auto v = ensure_alive_locked(s, pm);
+                        if (!v.ok()) {
+                            remove_slot_locked(s);
+                            snapshot_gauge_locked(pm);
+                            return v.error();
+                        }
                     }
+                    s->last_used_at = config_.now();
+                    snapshot_gauge_locked(pm);  // idle -> active
+                    pm.acquireWait = true;
+                    return PooledConnection(this, s);
                 }
-                s->last_used_at = config_.now();
-                return PooledConnection(this, s);
+                if (slots_.size() < config_.max) {
+                    auto c = make_connection();  // note: holds lock during backoff
+                    if (!c.ok()) return c.error();
+                    detail::PoolSlot* s = add_active_slot(std::move(c.value()));
+                    snapshot_gauge_locked(pm);  // final state: active (leased out)
+                    pm.acquireWait = true;
+                    return PooledConnection(this, s);
+                }
+                if (cv_.wait_until(lk, deadline) == std::cv_status::timeout &&
+                    idle_.empty() && slots_.size() >= config_.max) {
+                    Error e;
+                    e.code = ErrorCode::Pool;
+                    e.message = "connection acquire timed out";
+                    e.retriable = false;
+                    pm.acquireWait = true;
+                    timed_out = true;
+                    return e;
+                }
             }
-            if (slots_.size() < config_.max) {
-                auto c = make_connection();  // note: holds lock during backoff
-                if (!c.ok()) return c.error();
-                detail::PoolSlot* s = add_active_slot(std::move(c.value()));
-                return PooledConnection(this, s);
-            }
-            if (cv_.wait_until(lk, deadline) == std::cv_status::timeout &&
-                idle_.empty() && slots_.size() >= config_.max) {
-                Error e;
-                e.code = ErrorCode::Pool;
-                e.message = "connection acquire timed out";
-                e.retriable = false;
-                return e;
-            }
-        }
+        }();  // mu_ released here
+        pm.acquireSecs = timer.elapsed_seconds();
+        if (timed_out) span.setStatusError("");
+        flush_metrics(pm);
+        return result;
     }
 
     std::size_t total_count() const {
@@ -180,6 +212,14 @@ public:
         return config_.backoff;
     }
 
+    // Observability sinks (resolved once at construction; never null). The
+    // facade reads these to instrument query/execute on the same sinks the pool
+    // uses for acquire/reconnect/gauge.
+    obs::MetricsSink* metrics() const noexcept { return metrics_; }
+    obs::Tracer* tracer() const noexcept { return tracer_; }
+    bool metrics_enabled() const noexcept { return has_metrics_; }
+    bool tracer_enabled() const noexcept { return has_tracer_; }
+
     // One maintenance pass: reap expired idle connections (respecting min) and
     // refill back up to min. Public so tests can drive it deterministically.
     void maintain();
@@ -187,9 +227,63 @@ public:
 private:
     ConnectionPool(detail::cli::ICliDriver& driver,
                    detail::cli::ConnectionParams params, PoolConfig config)
-        : driver_(&driver), params_(std::move(params)), config_(std::move(config)) {}
+        : driver_(&driver), params_(std::move(params)), config_(std::move(config)) {
+        // Resolve null sinks to the process-wide no-ops and cache "is real"
+        // flags so every emission site is one predictable branch with no
+        // allocation on the default (uninstrumented) path. The shared_ptrs in
+        // config_.observability keep any real sinks alive for the pool's life.
+        metrics_ = config_.observability.metrics ? config_.observability.metrics.get()
+                                                 : &obs::noop_metrics_sink();
+        tracer_ = config_.observability.tracer ? config_.observability.tracer.get()
+                                               : &obs::noop_tracer();
+        has_metrics_ = static_cast<bool>(config_.observability.metrics);
+        has_tracer_ = static_cast<bool>(config_.observability.tracer);
+    }
 
     friend class PooledConnection;
+
+    // Observability emissions deferred out of the critical section: the locked
+    // code records what to emit into one of these, and flush_metrics() calls the
+    // user-provided sinks AFTER mu_ is released. This keeps a re-entrant, locking,
+    // or slow sink from deadlocking or stalling acquire/release/maintain, and
+    // guarantees the gauge is sampled at a single consistent state.
+    struct PendingMetrics {
+        bool gauge = false;
+        double idle = 0;
+        double active = 0;
+        bool acquireWait = false;
+        double acquireSecs = 0;
+        int reconnects = 0;
+    };
+
+    // Records the current idle/active counts. Caller holds mu_ (or is the
+    // single-threaded constructor), so the snapshot is a consistent point-in-time.
+    void snapshot_gauge_locked(PendingMetrics& pm) const {
+        pm.gauge = true;
+        pm.idle = static_cast<double>(idle_.size());
+        pm.active = static_cast<double>(slots_.size()) - pm.idle;
+    }
+
+    // Emits everything recorded in pm. MUST be called with mu_ NOT held.
+    void flush_metrics(const PendingMetrics& pm) {
+        if (has_metrics_) {
+            if (pm.gauge) {
+                metrics_->gauge("halcyon_pool_connections", pm.idle,
+                                {{"state", "idle"}});
+                metrics_->gauge("halcyon_pool_connections", pm.active,
+                                {{"state", "active"}});
+            }
+            if (pm.acquireWait)
+                metrics_->histogram("halcyon_pool_acquire_wait_seconds",
+                                    pm.acquireSecs, {});
+            if (pm.reconnects > 0)
+                metrics_->counter("halcyon_reconnects_total",
+                                  static_cast<double>(pm.reconnects), {});
+        }
+        if (has_tracer_)
+            for (int i = 0; i < pm.reconnects; ++i)
+                tracer_->startSpan("halcyon.reconnect", {})->end();
+    }
 
     // Attempts a physical connect with bounded exponential backoff.
     Result<std::unique_ptr<Connection>> make_connection() {
@@ -210,6 +304,9 @@ private:
         return last;
     }
 
+    // Inserts a slot into slots_ WITHOUT emitting the gauge; each caller emits
+    // exactly once after the slot reaches its final idle/active state, so a
+    // record-every-sample sink never sees a transient miscount.
     detail::PoolSlot* add_active_slot(std::unique_ptr<Connection> conn) {
         auto slot = std::make_unique<detail::PoolSlot>();
         slot->conn = std::move(conn);
@@ -220,12 +317,14 @@ private:
         return raw;
     }
 
+    // Bookkeeping only; the caller snapshots the gauge once at its final state.
     void add_idle_slot(std::unique_ptr<Connection> conn) {
         idle_.push_back(add_active_slot(std::move(conn)));
     }
 
-    // Validates a slot and reconnects it in place if dead. Caller holds the lock.
-    Result<void> ensure_alive_locked(detail::PoolSlot* s) {
+    // Validates a slot and reconnects it in place if dead. Caller holds the lock;
+    // a reconnect is RECORDED into pm and emitted after the lock is released.
+    Result<void> ensure_alive_locked(detail::PoolSlot* s, PendingMetrics& pm) {
         auto a = driver_->isAlive(s->conn->handle());
         if (a.ok() && a.value()) return Result<void>();
         auto c = make_connection();
@@ -233,9 +332,11 @@ private:
         s->conn = std::move(c.value());
         s->created_at = config_.now();
         s->last_used_at = config_.now();
+        ++pm.reconnects;  // transparently reconnected in place
         return Result<void>();
     }
 
+    // Bookkeeping only (no emission); the caller snapshots the gauge afterward.
     void remove_slot_locked(detail::PoolSlot* s) {
         for (auto it = slots_.begin(); it != slots_.end(); ++it) {
             if (it->get() == s) {
@@ -246,14 +347,19 @@ private:
     }
 
     void release_slot(detail::PoolSlot* s, bool broken) {
-        std::lock_guard<std::mutex> lk(mu_);
-        if (broken || stopping_) {
-            remove_slot_locked(s);
-        } else {
-            s->last_used_at = config_.now();
-            idle_.push_back(s);
+        PendingMetrics pm;
+        {
+            std::lock_guard<std::mutex> lk(mu_);
+            if (broken || stopping_) {
+                remove_slot_locked(s);
+            } else {
+                s->last_used_at = config_.now();
+                idle_.push_back(s);
+            }
+            snapshot_gauge_locked(pm);  // single sample at the final state
+            cv_.notify_one();
         }
-        cv_.notify_one();
+        flush_metrics(pm);  // emit after releasing mu_
     }
 
     void start_maintenance() {
@@ -281,6 +387,13 @@ private:
     std::deque<detail::PoolSlot*> idle_;
     bool stopping_ = false;
     std::thread maintenance_;
+
+    // Observability (resolved in the ctor; raw pointers never null, flags gate
+    // emission so the default path costs one branch).
+    obs::MetricsSink* metrics_ = nullptr;
+    obs::Tracer* tracer_ = nullptr;
+    bool has_metrics_ = false;
+    bool has_tracer_ = false;
 };
 
 inline void PooledConnection::release() {
@@ -292,28 +405,35 @@ inline void PooledConnection::release() {
 }
 
 inline void ConnectionPool::maintain() {
-    std::lock_guard<std::mutex> lk(mu_);
-    const auto now = config_.now();
+    PendingMetrics pm;
+    {
+        std::lock_guard<std::mutex> lk(mu_);
+        const auto now = config_.now();
 
-    std::deque<detail::PoolSlot*> keep;
-    for (detail::PoolSlot* s : idle_) {
-        const bool expired_life = (now - s->created_at) >= config_.maxLifetime;
-        const bool expired_idle = (now - s->last_used_at) >= config_.idleTimeout;
-        const bool over_min = slots_.size() > config_.min;
-        if (expired_life || (expired_idle && over_min)) {
-            remove_slot_locked(s);  // Connection dtor disconnects
-        } else {
-            keep.push_back(s);
+        std::deque<detail::PoolSlot*> keep;
+        for (detail::PoolSlot* s : idle_) {
+            const bool expired_life = (now - s->created_at) >= config_.maxLifetime;
+            const bool expired_idle = (now - s->last_used_at) >= config_.idleTimeout;
+            const bool over_min = slots_.size() > config_.min;
+            if (expired_life || (expired_idle && over_min)) {
+                remove_slot_locked(s);  // Connection dtor disconnects
+            } else {
+                keep.push_back(s);
+            }
         }
-    }
-    idle_ = std::move(keep);
+        idle_ = std::move(keep);
 
-    // Refill up to min (best effort; a failed connect is retried next pass).
-    while (slots_.size() < config_.min) {
-        auto c = make_connection();
-        if (!c.ok()) break;
-        add_idle_slot(std::move(c.value()));
+        // Refill up to min (best effort; a failed connect is retried next pass).
+        while (slots_.size() < config_.min) {
+            auto c = make_connection();
+            if (!c.ok()) break;
+            add_idle_slot(std::move(c.value()));
+        }
+        // Single gauge sample at the final consistent state (idle_ rebuilt,
+        // refill done) — never mid-reap, so active can't read negative.
+        snapshot_gauge_locked(pm);
     }
+    flush_metrics(pm);  // emit after releasing mu_
 }
 
 }  // namespace halcyon

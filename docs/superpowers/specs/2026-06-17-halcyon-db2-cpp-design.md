@@ -255,11 +255,22 @@ A `TypeBinder<T>` traits layer maps C++ ↔ Db2 CLI C types, bidirectionally
 | `std::string` / `std::string_view` | `SQL_C_CHAR` (UTF-8) |
 | `bool` | `SQL_C_BIT` |
 | `std::optional<T>` | nullable; `NULL` ↔ `nullopt` (length indicator) |
-| `std::chrono` date/time | `SQL_C_TYPE_TIMESTAMP` / `DATE` / `TIME` |
-| `std::vector<std::byte>` | `SQL_C_BINARY` |
+| `std::chrono::system_clock::time_point` | TIMESTAMP (UTC, via `SQL_C_CHAR` ISO-8601) |
+| `halcyon::Date` / `Time` / `Timestamp` | DATE / TIME / TIMESTAMP (string-exact, `SQL_C_CHAR`) |
+| `std::vector<std::byte>` | `SQL_C_BINARY` (chunked; embedded NULs preserved) |
 | `halcyon::Decimal` | `SQL_C_CHAR` decimal (exact) |
 
 Rules:
+
+- **Temporal carriage is text (`SQL_C_CHAR`), not the CLI `*_STRUCT` types.** Db2
+  round-trips DATE/TIME/TIMESTAMP losslessly as character data, and the neutral
+  seam `Value` deliberately carries no temporal alternative, so a chrono/decimal
+  value crossing the seam needs zero new variant members. `std::chrono::system_clock::time_point`
+  ↔ TIMESTAMP is the one clean mapping under **C++17** (which has no calendar
+  types); bare DATE and TIME have no epoch/clock, and TIMESTAMP can carry more
+  fractional precision than `system_clock`, so the string-exact `halcyon::Date`/
+  `Time`/`Timestamp` wrappers are provided for full fidelity and for DATE/TIME.
+  `time_point` values are normalised to UTC.
 
 - **Nullability is type-safe:** a non-`optional` column returning NULL yields a
   `Mapping` error, never silent garbage.

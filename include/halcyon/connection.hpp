@@ -145,6 +145,13 @@ public:
 
     std::size_t column_count() const noexcept { return columns_; }
 
+    // The error that ended iteration early, if any. Forward-only iteration stops
+    // when fetch() reports end-of-cursor OR an error; this distinguishes the two
+    // so a mid-stream Db2 error is never silently mistaken for end-of-results.
+    // Check after a range-for loop: empty == clean end, set == fetch failed.
+    const std::optional<Error>& error() const noexcept { return error_; }
+    bool ok() const noexcept { return !error_.has_value(); }
+
     class iterator {
     public:
         using iterator_category = std::input_iterator_tag;
@@ -165,7 +172,17 @@ public:
     private:
         void advance() {
             auto f = rs_->driver_->fetch(rs_->stmt_);
-            if (!f.ok() || !f.value()) { at_end_ = true; row_.reset(); return; }
+            if (!f.ok()) {  // a mid-stream Db2 error ends iteration, recorded
+                rs_->error_ = f.error();
+                at_end_ = true;
+                row_.reset();
+                return;
+            }
+            if (!f.value()) {  // clean end of cursor
+                at_end_ = true;
+                row_.reset();
+                return;
+            }
             row_.emplace(*rs_->driver_, rs_->stmt_, rs_->columns_);
         }
         ResultSet* rs_ = nullptr;
@@ -185,6 +202,7 @@ private:
     detail::cli::ICliDriver* driver_;
     detail::cli::StatementHandle stmt_;
     std::size_t columns_;
+    std::optional<Error> error_;      // set if a fetch failed mid-iteration
     std::optional<Statement> owned_;  // present when the ResultSet owns its statement
 };
 

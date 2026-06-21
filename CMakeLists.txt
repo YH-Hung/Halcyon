@@ -16,6 +16,7 @@ option(HALCYON_BUILD_TESTS "Build tests" ON)
 option(HALCYON_BUILD_INTEGRATION_TESTS "Build Dockerized Db2 integration tests" OFF)
 option(HALCYON_BUILD_EXAMPLES "Build examples" OFF)
 option(HALCYON_WARNINGS_AS_ERRORS "Treat warnings as errors" OFF)
+option(HALCYON_BUILD_SMOKE_TEST "Add the install/find_package smoke test" ON)
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 find_package(DB2CLI REQUIRED)
@@ -47,7 +48,49 @@ if(HALCYON_WARNINGS_AS_ERRORS)
     target_compile_options(halcyon PRIVATE -Werror)
 endif()
 
-target_link_libraries(halcyon PRIVATE DB2::CLI)
+# PUBLIC: halcyon is a static library, so the SQL* symbols from
+# db2_cli_driver.cpp are resolved at the *consumer's* link step — the db2
+# dependency must propagate via the exported usage requirements.
+target_link_libraries(halcyon PUBLIC DB2::CLI)
+
+# Optional observability adapters: compiled into the library ONLY when the option
+# is ON and the (non-vendored) dependency is found. A missing package warns and
+# skips rather than failing the build. The EFFECTIVE *_ADAPTER_ENABLED flags
+# below (option AND package found) — not the requested options — drive both the
+# compile definition and the exported package config's find_dependency, so an
+# install built with the option ON but the package missing does not produce a
+# config that demands a dependency that was never linked.
+set(HALCYON_PROMETHEUS_ADAPTER_ENABLED FALSE)
+set(HALCYON_OTEL_ADAPTER_ENABLED FALSE)
+
+if(HALCYON_WITH_PROMETHEUS)
+    find_package(prometheus-cpp CONFIG)
+    if(prometheus-cpp_FOUND)
+        target_sources(halcyon PRIVATE src/observability/prometheus_adapter.cpp)
+        target_link_libraries(halcyon PUBLIC prometheus-cpp::core)
+        target_compile_definitions(halcyon PUBLIC HALCYON_WITH_PROMETHEUS)
+        set(HALCYON_PROMETHEUS_ADAPTER_ENABLED TRUE)
+        message(STATUS "Halcyon: prometheus-cpp metrics adapter enabled")
+    else()
+        message(WARNING
+            "HALCYON_WITH_PROMETHEUS=ON but prometheus-cpp not found; skipping adapter")
+    endif()
+endif()
+
+if(HALCYON_WITH_OTEL)
+    find_package(opentelemetry-cpp CONFIG)
+    if(opentelemetry-cpp_FOUND)
+        target_sources(halcyon PRIVATE src/observability/otel_adapter.cpp)
+        target_link_libraries(halcyon PUBLIC
+            opentelemetry-cpp::api opentelemetry-cpp::trace opentelemetry-cpp::common)
+        target_compile_definitions(halcyon PUBLIC HALCYON_WITH_OTEL)
+        set(HALCYON_OTEL_ADAPTER_ENABLED TRUE)
+        message(STATUS "Halcyon: opentelemetry-cpp tracing adapter enabled")
+    else()
+        message(WARNING
+            "HALCYON_WITH_OTEL=ON but opentelemetry-cpp not found; skipping adapter")
+    endif()
+endif()
 
 if(DB2CLI_LIBRARY_DIR)
     set_target_properties(halcyon PROPERTIES
@@ -55,9 +98,63 @@ if(DB2CLI_LIBRARY_DIR)
         INSTALL_RPATH "${DB2CLI_LIBRARY_DIR}")
 endif()
 
+# ---- Install + package config: find_package(Halcyon) -> halcyon::halcyon ----
+include(GNUInstallDirs)
+include(CMakePackageConfigHelpers)
+
+set(HALCYON_INSTALL_CMAKEDIR "${CMAKE_INSTALL_LIBDIR}/cmake/Halcyon")
+
+install(TARGETS halcyon EXPORT halcyonTargets
+    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+    INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+
+# Public headers, including the detail/cli and observability subtrees.
+install(DIRECTORY include/halcyon
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+    FILES_MATCHING PATTERN "*.hpp")
+
+install(EXPORT halcyonTargets
+    FILE HalcyonTargets.cmake
+    NAMESPACE halcyon::
+    DESTINATION ${HALCYON_INSTALL_CMAKEDIR})
+
+configure_package_config_file(
+    cmake/HalcyonConfig.cmake.in
+    "${CMAKE_CURRENT_BINARY_DIR}/HalcyonConfig.cmake"
+    INSTALL_DESTINATION ${HALCYON_INSTALL_CMAKEDIR})
+
+write_basic_package_version_file(
+    "${CMAKE_CURRENT_BINARY_DIR}/HalcyonConfigVersion.cmake"
+    VERSION ${PROJECT_VERSION}
+    COMPATIBILITY AnyNewerVersion)
+
+# Ship FindDB2CLI.cmake next to the config so find_dependency(DB2CLI) resolves
+# the (link-time) db2 dependency in a downstream build.
+install(FILES
+    "${CMAKE_CURRENT_BINARY_DIR}/HalcyonConfig.cmake"
+    "${CMAKE_CURRENT_BINARY_DIR}/HalcyonConfigVersion.cmake"
+    cmake/FindDB2CLI.cmake
+    DESTINATION ${HALCYON_INSTALL_CMAKEDIR})
+
 if(HALCYON_BUILD_TESTS)
     enable_testing()
     add_subdirectory(tests)
+
+    # Install smoke test: install to a scratch prefix, then configure+build+run a
+    # standalone consumer that find_package(Halcyon)s it. Proves the exported
+    # target, header install, version file, and DB2 dependency propagation.
+    if(HALCYON_BUILD_SMOKE_TEST)
+        add_test(NAME halcyon_install_smoke
+            COMMAND ${CMAKE_COMMAND}
+                -DHALCYON_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+                -DHALCYON_BUILD_DIR=${CMAKE_CURRENT_BINARY_DIR}
+                -DDB2_CLIDRIVER_ROOT=${DB2_CLIDRIVER_ROOT}
+                -DDB2CLI_LIBRARY_DIR=${DB2CLI_LIBRARY_DIR}
+                -DSMOKE_CONFIG=$<CONFIG>
+                -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/run_smoke_test.cmake)
+    endif()
 endif()
 
 if(HALCYON_BUILD_EXAMPLES)

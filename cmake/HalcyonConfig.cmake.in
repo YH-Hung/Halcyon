@@ -1,0 +1,33 @@
+@PACKAGE_INIT@
+
+# Re-find the IBM Db2 CLI dependency. Halcyon is a static library that links db2
+# PUBLIC, so the imported target DB2::CLI must exist in the consumer's build
+# before HalcyonTargets is loaded. FindDB2CLI.cmake is installed alongside this
+# config; point the module path at this directory so find_dependency locates it.
+#
+# Note: the vendored-driver default root (third_party/clidriver) is relative to
+# the *consumer's* source tree, so a consumer that does not bundle the driver
+# should set DB2_CLIDRIVER_ROOT (or DB2CLI_INCLUDE_DIR / DB2CLI_LIBRARY) before
+# find_package(Halcyon).
+list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_LIST_DIR}")
+include(CMakeFindDependencyMacro)
+find_dependency(DB2CLI)
+
+# When built with the observability adapters, the imported targets are recorded
+# PUBLIC into HalcyonTargets (static lib), so re-find those packages here too —
+# same reasoning as DB2::CLI above. These flags reflect what was ACTUALLY
+# compiled (option ON *and* package found), not merely what was requested, so an
+# install built with the option ON but the package missing does not demand a
+# dependency that was never linked. No-ops for a default-built install.
+set(HALCYON_PROMETHEUS_ADAPTER_ENABLED @HALCYON_PROMETHEUS_ADAPTER_ENABLED@)
+set(HALCYON_OTEL_ADAPTER_ENABLED @HALCYON_OTEL_ADAPTER_ENABLED@)
+if(HALCYON_PROMETHEUS_ADAPTER_ENABLED)
+    find_dependency(prometheus-cpp)
+endif()
+if(HALCYON_OTEL_ADAPTER_ENABLED)
+    find_dependency(opentelemetry-cpp)
+endif()
+
+include("${CMAKE_CURRENT_LIST_DIR}/HalcyonTargets.cmake")
+
+check_required_components(Halcyon)

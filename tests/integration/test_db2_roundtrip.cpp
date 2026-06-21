@@ -1,9 +1,12 @@
 #include <gtest/gtest.h>
 
+#include <chrono>
+#include <cstddef>
 #include <cstdlib>
 #include <optional>
 #include <string>
 #include <tuple>
+#include <vector>
 
 #include "halcyon/halcyon.hpp"
 
@@ -119,6 +122,80 @@ TEST(Db2PoolIntegration, ConcurrentAcquireAndQuery) {
         ASSERT_TRUE(r.ok()) << r.error().message;
         EXPECT_EQ(r.value(), 1);
     }
+}
+
+// Exercises the §7 type-mapping completion against live Db2: real binary reads
+// (BLOB with embedded NUL and > one read-buffer in size), exact Decimal, and the
+// DATE/TIME/TIMESTAMP wrappers — including binding string-carried values INTO
+// strongly-typed temporal/decimal columns (the implicit SQL_C_CHAR cast).
+TEST(Db2TypeMapping, BinaryDecimalTemporalRoundTrip) {
+    auto d = dsn();
+    if (!d) GTEST_SKIP() << "HALCYON_TEST_DSN not set; skipping live Db2 test";
+
+    auto db = halcyon::Database::open(*d);
+    ASSERT_TRUE(db.ok()) << db.error().message;
+    auto& h = db.value();
+
+    h.execute("DROP TABLE halcyon_types");  // ignore error if absent
+    ASSERT_TRUE(h.execute("CREATE TABLE halcyon_types("
+                          "id INT NOT NULL, payload BLOB(1M), "
+                          "amount DECIMAL(31,5), d DATE, t TIME, ts TIMESTAMP)")
+                    .ok());
+
+    std::vector<std::byte> blob(5000, std::byte{0xAB});  // > 4096-byte read chunk
+    blob[10] = std::byte{0x00};                          // embedded NULs
+    blob[4096] = std::byte{0x00};
+
+    auto ins = h.execute(
+        "INSERT INTO halcyon_types(id, payload, amount, d, t, ts) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        1, blob, halcyon::Decimal{"12345.67800"}, halcyon::Date{"2026-06-21"},
+        halcyon::Time{"13:45:00"}, halcyon::Timestamp{"2026-06-21 13:45:00.123456"});
+    ASSERT_TRUE(ins.ok()) << ins.error().message;  // string→temporal/decimal bind cast
+
+    auto qr = h.query(
+        "SELECT payload, amount, d, t, ts FROM halcyon_types WHERE id = ?", 1);
+    ASSERT_TRUE(qr.ok()) << qr.error().message;
+    int rows = 0;
+    for (auto& row : qr.value()) {
+        auto [payload, amount, date, time, ts] =
+            row.as<std::vector<std::byte>, halcyon::Decimal, halcyon::Date,
+                   halcyon::Time, halcyon::Timestamp>();
+        EXPECT_EQ(payload, blob);  // byte-exact: the binary-read fix
+        EXPECT_EQ(amount, halcyon::Decimal{"12345.67800"});  // exact scale
+        EXPECT_EQ(date, halcyon::Date{"2026-06-21"});
+        EXPECT_EQ(time.value, "13:45:00");
+        // Db2's timestamp text form varies (space vs '-' separators); assert the
+        // components survive rather than an exact string.
+        EXPECT_NE(ts.value.find("2026-06-21"), std::string::npos);
+        EXPECT_NE(ts.value.find("123456"), std::string::npos);
+        ++rows;
+    }
+    EXPECT_TRUE(qr.value().ok()) << "iteration ended on a fetch error";
+    EXPECT_EQ(rows, 1);
+
+    // std::chrono interop (spec §7): bind a system_clock::time_point INTO the
+    // TIMESTAMP column and read it back as a time_point, asserting exact equality
+    // (exercises the chrono formatter, Db2's implicit cast, and the parser).
+    using TP = std::chrono::system_clock::time_point;
+    const TP tp_in =
+        halcyon::TypeBinder<TP>::from_value(
+            halcyon::detail::cli::Value{std::string{"2025-01-02 03:04:05.000000"}})
+            .value();
+    ASSERT_TRUE(
+        h.execute("INSERT INTO halcyon_types(id, ts) VALUES (?, ?)", 2, tp_in)
+            .ok());
+    auto qr2 = h.query("SELECT ts FROM halcyon_types WHERE id = ?", 2);
+    ASSERT_TRUE(qr2.ok()) << qr2.error().message;
+    int chrono_rows = 0;
+    for (auto& row : qr2.value()) {
+        auto [tp_out] = row.as<TP>();
+        EXPECT_EQ(tp_out, tp_in);  // round-trips through a real Db2 TIMESTAMP
+        ++chrono_rows;
+    }
+    EXPECT_EQ(chrono_rows, 1);
+
+    h.execute("DROP TABLE halcyon_types");
 }
 
 TEST(Db2FacadeIntegration, QueryExecuteAndTransaction) {

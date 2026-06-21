@@ -1,7 +1,10 @@
 #pragma once
 
+#include <cctype>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <limits>
 #include <optional>
 #include <string>
@@ -144,6 +147,216 @@ struct TypeBinder<std::optional<U>> {
         auto r = TypeBinder<U>::from_value(v);
         if (!r.ok()) return r.error();
         return std::optional<U>{std::move(r.value())};
+    }
+};
+
+// --- exact decimal + date/time (spec §7) ---
+// These cross the thin CLI seam as text: the neutral Value variant carries no
+// temporal/decimal alternative, and Db2 round-trips DECIMAL and DATE/TIME/
+// TIMESTAMP losslessly as SQL_C_CHAR. Each wrapper stores the driver's text
+// verbatim, so exact scale and sub-second precision are preserved.
+
+// Exact decimal, stored as its textual form (e.g. "123.4500").
+class Decimal {
+public:
+    Decimal() = default;
+    explicit Decimal(std::string text) : text_(std::move(text)) {}
+    const std::string& str() const noexcept { return text_; }
+    friend bool operator==(const Decimal& a, const Decimal& b) {
+        return a.text_ == b.text_;
+    }
+    friend bool operator!=(const Decimal& a, const Decimal& b) {
+        return !(a == b);
+    }
+
+private:
+    std::string text_;
+};
+
+// SQL DATE / TIME / TIMESTAMP as text (ISO-8601-ish; the exact form is whatever
+// the driver emits). Distinct types so binding/reading stays type-safe.
+struct Date {
+    std::string value;  // e.g. "2026-06-21"
+};
+struct Time {
+    std::string value;  // e.g. "13:45:00"
+};
+struct Timestamp {
+    std::string value;  // e.g. "2026-06-21 13:45:00.123456"
+};
+inline bool operator==(const Date& a, const Date& b) { return a.value == b.value; }
+inline bool operator!=(const Date& a, const Date& b) { return !(a == b); }
+inline bool operator==(const Time& a, const Time& b) { return a.value == b.value; }
+inline bool operator!=(const Time& a, const Time& b) { return !(a == b); }
+inline bool operator==(const Timestamp& a, const Timestamp& b) {
+    return a.value == b.value;
+}
+inline bool operator!=(const Timestamp& a, const Timestamp& b) {
+    return !(a == b);
+}
+
+namespace detail {
+// Shared from_value for a string-carried wrapper type: NULL and wrong-alternative
+// both become Mapping errors; a string alternative is handed to make().
+template <class Make>
+auto string_carried_from_value(const detail::cli::Value& v, const char* what,
+                               Make make)
+    -> Result<decltype(make(std::declval<const std::string&>()))> {
+    using T = decltype(make(std::declval<const std::string&>()));
+    if (std::holds_alternative<detail::cli::Null>(v))
+        return mapping_error(std::string("NULL into non-optional ") + what);
+    if (auto* s = std::get_if<std::string>(&v)) return T{make(*s)};
+    return mapping_error(std::string("type mismatch: expected ") + what);
+}
+}  // namespace detail
+
+template <>
+struct TypeBinder<Decimal> {
+    static detail::cli::Value to_value(const Decimal& d) {
+        return detail::cli::Value{d.str()};
+    }
+    static Result<Decimal> from_value(const detail::cli::Value& v) {
+        return detail::string_carried_from_value(
+            v, "decimal", [](const std::string& s) { return Decimal{s}; });
+    }
+};
+
+template <>
+struct TypeBinder<Date> {
+    static detail::cli::Value to_value(const Date& d) {
+        return detail::cli::Value{d.value};
+    }
+    static Result<Date> from_value(const detail::cli::Value& v) {
+        return detail::string_carried_from_value(
+            v, "date", [](const std::string& s) { return Date{s}; });
+    }
+};
+
+template <>
+struct TypeBinder<Time> {
+    static detail::cli::Value to_value(const Time& t) {
+        return detail::cli::Value{t.value};
+    }
+    static Result<Time> from_value(const detail::cli::Value& v) {
+        return detail::string_carried_from_value(
+            v, "time", [](const std::string& s) { return Time{s}; });
+    }
+};
+
+template <>
+struct TypeBinder<Timestamp> {
+    static detail::cli::Value to_value(const Timestamp& t) {
+        return detail::cli::Value{t.value};
+    }
+    static Result<Timestamp> from_value(const detail::cli::Value& v) {
+        return detail::string_carried_from_value(
+            v, "timestamp", [](const std::string& s) { return Timestamp{s}; });
+    }
+};
+
+// --- std::chrono interop (spec §7: std::chrono <-> SQL_C_TYPE_TIMESTAMP) ---
+// system_clock::time_point is the one C++17 chrono type that maps cleanly to a
+// SQL TIMESTAMP (bare DATE/TIME have no epoch and C++17 has no calendar types,
+// so those keep the string-exact halcyon::Date/Time wrappers above). The
+// time_point is carried over the seam as a UTC ISO-8601 string (SQL_C_CHAR),
+// which Db2 implicitly casts to/from TIMESTAMP.
+namespace detail {
+
+// Howard Hinnant's calendar algorithms (public domain): days since 1970-01-01.
+constexpr long long days_from_civil(long long y, unsigned m, unsigned d) noexcept {
+    y -= m <= 2;
+    const long long era = (y >= 0 ? y : y - 399) / 400;
+    const unsigned yoe = static_cast<unsigned>(y - era * 400);
+    const unsigned doy = (153u * (m > 2 ? m - 3u : m + 9u) + 2u) / 5u + d - 1u;
+    const unsigned doe = yoe * 365u + yoe / 4u - yoe / 100u + doy;
+    return era * 146097LL + static_cast<long long>(doe) - 719468LL;
+}
+
+struct civil_date {
+    long long y;
+    unsigned m;
+    unsigned d;
+};
+constexpr civil_date civil_from_days(long long z) noexcept {
+    z += 719468LL;
+    const long long era = (z >= 0 ? z : z - 146096) / 146097;
+    const unsigned doe = static_cast<unsigned>(z - era * 146097);
+    const unsigned yoe = (doe - doe / 1460u + doe / 36524u - doe / 146096u) / 365u;
+    const long long y = static_cast<long long>(yoe) + era * 400;
+    const unsigned doy = doe - (365u * yoe + yoe / 4u - yoe / 100u);
+    const unsigned mp = (5u * doy + 2u) / 153u;
+    const unsigned d = doy - (153u * mp + 2u) / 5u + 1u;
+    const unsigned m = mp < 10u ? mp + 3u : mp - 9u;
+    return civil_date{y + (m <= 2), m, d};
+}
+
+inline std::string format_timestamp(std::chrono::system_clock::time_point tp) {
+    using namespace std::chrono;
+    const auto secs = floor<seconds>(tp);  // secs <= tp, so frac is in [0, 1e6)
+    const long long micros = duration_cast<microseconds>(tp - secs).count();
+    long long s = secs.time_since_epoch().count();
+    long long days = s / 86400;
+    long long rem = s % 86400;
+    if (rem < 0) {
+        rem += 86400;
+        --days;
+    }
+    const civil_date c = civil_from_days(days);
+    char buf[48];
+    std::snprintf(buf, sizeof(buf), "%04lld-%02u-%02u %02lld:%02lld:%02lld.%06lld",
+                  c.y, c.m, c.d, rem / 3600, (rem % 3600) / 60, rem % 60, micros);
+    return std::string(buf);
+}
+
+// Tolerant parse of a Db2 timestamp string: splits on any non-digit, so both
+// "YYYY-MM-DD HH:MM:SS.ffffff" and Db2's "YYYY-MM-DD-HH.MM.SS.ffffff" parse. The
+// fractional field is scaled to microseconds (system_clock's practical limit).
+inline Result<std::chrono::system_clock::time_point> parse_timestamp(
+    const std::string& s) {
+    long long parts[7] = {0, 0, 0, 0, 0, 0, 0};
+    int np = 0;
+    std::size_t frac_digits = 0;
+    for (std::size_t i = 0; i < s.size() && np < 7;) {
+        if (!std::isdigit(static_cast<unsigned char>(s[i]))) {
+            ++i;
+            continue;
+        }
+        const std::size_t start = i;
+        long long val = 0;
+        while (i < s.size() && std::isdigit(static_cast<unsigned char>(s[i]))) {
+            val = val * 10 + (s[i] - '0');
+            ++i;
+        }
+        if (np == 6) frac_digits = i - start;
+        parts[np++] = val;
+    }
+    if (np < 6)
+        return mapping_error("invalid timestamp text: '" + s + "'");
+    long long micros = np >= 7 ? parts[6] : 0;
+    for (std::size_t k = frac_digits; k > 6; --k) micros /= 10;  // trim > microsec
+    for (std::size_t k = frac_digits; k < 6 && np >= 7; ++k) micros *= 10;  // pad
+    const long long days =
+        days_from_civil(parts[0], static_cast<unsigned>(parts[1]),
+                        static_cast<unsigned>(parts[2]));
+    const long long secs = days * 86400LL + parts[3] * 3600 + parts[4] * 60 + parts[5];
+    using namespace std::chrono;
+    return system_clock::time_point(seconds(secs) + microseconds(micros));
+}
+
+}  // namespace detail
+
+template <>
+struct TypeBinder<std::chrono::system_clock::time_point> {
+    using TP = std::chrono::system_clock::time_point;
+    static detail::cli::Value to_value(TP tp) {
+        return detail::cli::Value{detail::format_timestamp(tp)};
+    }
+    static Result<TP> from_value(const detail::cli::Value& v) {
+        if (std::holds_alternative<detail::cli::Null>(v))
+            return detail::mapping_error("NULL into non-optional timestamp");
+        if (auto* s = std::get_if<std::string>(&v))
+            return detail::parse_timestamp(*s);
+        return detail::mapping_error("type mismatch: expected timestamp string");
     }
 };
 

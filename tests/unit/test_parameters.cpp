@@ -54,3 +54,45 @@ TEST(Parameters, DoubleColonIsLeftLiteral) {
     EXPECT_EQ(r.value().sql, "SELECT a::int FROM t");
     EXPECT_TRUE(r.value().params.empty());
 }
+
+TEST(Parameters, NamedSkipsSingleQuotedStringLiteral) {
+    auto r = halcyon::detail::bind_named(
+        "SELECT ':id' AS lit FROM t WHERE id = :id", params{{"id", 7}});
+    ASSERT_TRUE(r.ok()) << r.error().message;
+    EXPECT_EQ(r.value().sql, "SELECT ':id' AS lit FROM t WHERE id = ?");
+    ASSERT_EQ(r.value().params.size(), 1u);
+    EXPECT_EQ(r.value().params[0], Value{std::int64_t{7}});
+}
+
+TEST(Parameters, NamedHandlesDoubledQuoteEscapeInString) {
+    auto r = halcyon::detail::bind_named("SELECT 'it''s :x' FROM t WHERE a = :a",
+                                         params{{"a", 4}});
+    ASSERT_TRUE(r.ok()) << r.error().message;
+    EXPECT_EQ(r.value().sql, "SELECT 'it''s :x' FROM t WHERE a = ?");
+    ASSERT_EQ(r.value().params.size(), 1u);
+    EXPECT_EQ(r.value().params[0], Value{std::int64_t{4}});
+}
+
+TEST(Parameters, NamedSkipsDelimitedIdentifier) {
+    auto r = halcyon::detail::bind_named("SELECT \":id\" FROM t WHERE z = :z",
+                                         params{{"z", 3}});
+    ASSERT_TRUE(r.ok()) << r.error().message;
+    EXPECT_EQ(r.value().sql, "SELECT \":id\" FROM t WHERE z = ?");
+    ASSERT_EQ(r.value().params.size(), 1u);
+}
+
+TEST(Parameters, NamedSkipsLineComment) {
+    auto r = halcyon::detail::bind_named(
+        "SELECT 1 -- nope :id here\nFROM t WHERE x = :x", params{{"x", 1}});
+    ASSERT_TRUE(r.ok()) << r.error().message;
+    EXPECT_EQ(r.value().sql, "SELECT 1 -- nope :id here\nFROM t WHERE x = ?");
+    ASSERT_EQ(r.value().params.size(), 1u);
+}
+
+TEST(Parameters, NamedSkipsBlockComment) {
+    auto r = halcyon::detail::bind_named(
+        "SELECT /* :id and :nope */ x FROM t WHERE y = :y", params{{"y", 2}});
+    ASSERT_TRUE(r.ok()) << r.error().message;
+    EXPECT_EQ(r.value().sql, "SELECT /* :id and :nope */ x FROM t WHERE y = ?");
+    ASSERT_EQ(r.value().params.size(), 1u);
+}
