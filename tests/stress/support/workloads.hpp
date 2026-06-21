@@ -93,4 +93,21 @@ inline Workload make_pool_contention(Database& db) {
     }};
 }
 
+// --- Scenario 2: async executor saturation (product path: Database async) ---
+// Each op launches a typed async query on the Database's internal executor and
+// blocks on its future. Many runner threads launching at once saturate the fixed
+// executor; every future must resolve exactly once with the right scalar.
+inline Workload make_executor_saturation(Database& db) {
+    return Workload{"executor", [&db](WorkerCtx& ctx) {
+        auto fut = db.queryAsync<One>(select_n(7));
+        auto r = fut.get();
+        if (!r.ok()) {
+            ctx.fail("async query failed: " + r.error().message);
+            return;
+        }
+        if (r.value().size() != 1 || r.value()[0].v != 7)
+            ctx.fail("wrong scalar from async query");
+    }};
+}
+
 }  // namespace halcyon::stress

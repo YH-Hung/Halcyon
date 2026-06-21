@@ -132,3 +132,21 @@ TEST(StressScenario, PoolContentionStaysConsistent) {
     EXPECT_EQ(db.value().pool().active_count(), 0u);
     EXPECT_EQ(db.value().pool().idle_count(), db.value().pool().total_count());
 }
+
+using halcyon::stress::make_executor_saturation;
+
+TEST(StressScenario, ExecutorSaturationResolvesEveryFuture) {
+    auto fake = std::make_shared<ConcurrentFakeDriver>();
+    auto db = Database::open(fake, "dsn", config_for(ScenarioId::Executor, 4));
+    ASSERT_TRUE(db.ok()) << db.error().message;
+
+    Workload w = make_executor_saturation(db.value());
+    RunConfig cfg;
+    cfg.threads = 16;                 // far more launchers than executor threads
+    cfg.stop.total_iters = 8000;
+    RunReport r = run_workload(w, cfg);
+
+    EXPECT_FALSE(r.failed) << r.first_error;
+    EXPECT_EQ(r.ops, 8000u);          // every op (a launched+awaited future) done
+    EXPECT_EQ(db.value().pool().active_count(), 0u);
+}
