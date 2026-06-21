@@ -43,7 +43,7 @@ statement is prepared.
 | Lending | RAII `StatementLease`; cached lease returns entry, transient finalizes |
 | Busy-entry hit | Serve a transient uncached prepare (overflow); cached entry untouched |
 | Capacity | `PoolConfig.statementCacheSize` count, default 64, LRU eviction finalizes |
-| Invalidation | Clear all on reconnect; drop the single entry on a statement-level error |
+| Invalidation | Reconnect replaces the whole connection (fresh empty cache); drop the single entry on a statement-level error |
 | Seam change | Add `ICliDriver::closeCursor(StatementHandle)` |
 | Observability | `halcyon_stmt_cache_total{result}` counter + `halcyon_stmt_cache_size` gauge |
 | Thread-safety | None internal; single-owner connection, pool serializes handoff |
@@ -86,8 +86,6 @@ public:
   // Returns a lease for sql: hit (reuse), miss (prepare+insert), or overflow
   // (transient prepare when the matching entry is busy or capacity == 0).
   Result<StatementLease> acquire(const std::string& sql);
-
-  void clear();  // drop all entries WITHOUT finalize (used after reconnect)
 
 private:
   struct Entry { std::string key; cli::StatementHandle handle; bool busy; };
@@ -140,9 +138,11 @@ a `StatementLease` (the transient lease subsumes the old finalize-on-destroy
 `Statement` behavior). `Statement` as a standalone public type is retained for
 direct `Connection::prepare`, which stays non-caching and returns a transient.
 
-On a transparent reconnect (pool/Connection reconnect path), after the new
-physical connection is established the Connection calls `cache.clear()`; the old
-handles are already invalid, so entries are dropped without `finalize`.
+On a transparent reconnect the pool discards the entire broken `Connection` and
+builds a new one (`ConnectionPool::ensure_alive_locked` reassigns the slot's
+`Connection`), so the new connection starts with a fresh, empty cache and a
+reconnect can never serve a handle bound to the dead `dbc`. No explicit
+clear-on-reconnect call is needed.
 
 ## 4. Cache Key & Lifecycle
 
@@ -151,8 +151,10 @@ handles are already invalid, so entries are dropped without `finalize`.
   as-is. No trimming, casing, or normalization. Named and anonymous callers that
   resolve to identical prepared text share an entry.
 - **Acquire outcomes:**
-  - *miss* → `prepare`; if at capacity, evict LRU victim (`finalize`), insert new
-    entry as MRU+busy; emit `result="miss"`.
+  - *miss* → `prepare`; if at capacity, evict the least-recently-used **idle**
+    entry (`finalize`) and insert the new entry as MRU+busy (`result="miss"`); if
+    every entry at capacity is busy, serve a transient instead (`result="overflow"`)
+    so a busy entry holding a live lease is never evicted out from under it.
   - *hit, idle* → mark busy, splice to MRU; emit `result="hit"`.
   - *hit, busy* → `prepare` a transient (no insert); emit `result="overflow"`.
   - *capacity 0* → always transient; emit `result="overflow"`.
@@ -162,7 +164,9 @@ handles are already invalid, so entries are dropped without `finalize`.
 
 ## 5. Invalidation
 
-- **Reconnect:** `clear()` — every entry dropped (no finalize; handles dead).
+- **Reconnect:** structural — the pool discards the whole `Connection` and builds
+  a new one (fresh, empty cache), so a reconnect cannot serve a stale handle. No
+  explicit clear path exists.
 - **Statement-level error** (`bindParams`/`execute`/`fetch` returns an error on a
   cached handle): the lease is **poisoned**, so on release the entry is finalized
   and removed; the next call re-prepares it. Covers stale-plan / schema-change
@@ -207,8 +211,11 @@ already appears inside the existing `halcyon.query`/`halcyon.execute` spans.
 std::size_t statementCacheSize = 64;  // per-connection LRU capacity; 0 disables
 ```
 
-Propagated to every connection the pool creates. Direct (non-pool) `Connection`
-construction takes the same capacity (default 64).
+Propagated to every connection the pool creates, so the product path
+(`Database` → pool) is cached by default. Direct (non-pool) `Connection`
+construction defaults to capacity `0` (disabled), preserving the low-level
+prepare/finalize contract that existing core tests rely on; callers opt in by
+passing an explicit capacity.
 
 ## 10. Testing
 
@@ -220,7 +227,7 @@ construction takes the same capacity (default 64).
   cached entry count unchanged.
 - poison-on-error: a forced `execute`/`fetch` error drops the entry; next call
   re-prepares.
-- `clear()` on reconnect drops all entries without `finalize`.
+- `~StatementCache` finalizes every live handle (best-effort).
 - `closeCursor` invoked on cached-lease release; not on transient finalize path.
 - `statementCacheSize = 0` → always transient, no entries retained.
 - Named/anonymous SQL resolving to identical prepared text share one entry.
