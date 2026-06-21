@@ -1,0 +1,43 @@
+---
+Language: Cpp
+BasedOnStyle: LLVM
+
+# Halcyon uses a compact C++17 style with 4-space indentation and attached
+# braces. Keep the formatter from importing LLVM's 2-space defaults.
+Standard: c++17
+IndentWidth: 4
+TabWidth: 4
+UseTab: Never
+AccessModifierOffset: -4
+IndentCaseLabels: true
+NamespaceIndentation: None
+BreakBeforeBraces: Attach
+
+# Existing code keeps references and pointers attached to the type.
+PointerAlignment: Left
+ReferenceAlignment: Pointer
+DerivePointerAlignment: false
+
+# The current codebase intentionally uses compact guards, simple loops, and
+# scoped test blocks. Preserve those instead of expanding them mechanically.
+AllowShortBlocksOnASingleLine: Always
+AllowShortFunctionsOnASingleLine: All
+AllowShortIfStatementsOnASingleLine: AllIfsAndElse
+AllowShortLoopsOnASingleLine: true
+AllowShortLambdasOnASingleLine: All
+
+# Avoid noisy wrapping churn in SQL strings, comments, and fluent-style tests.
+ColumnLimit: 0
+ContinuationIndentWidth: 4
+BinPackArguments: true
+BinPackParameters: true
+
+AlignTrailingComments:
+  Kind: Always
+  OverEmptyLines: 0
+SpacesBeforeTrailingComments: 2
+FixNamespaceComments: true
+
+IncludeBlocks: Preserve
+SortIncludes: CaseSensitive
+...

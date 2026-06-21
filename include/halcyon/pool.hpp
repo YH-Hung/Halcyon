@@ -29,12 +29,12 @@ struct PoolConfig {
     std::chrono::milliseconds idleTimeout{60000};
     std::chrono::milliseconds maxLifetime{1800000};
     bool validateOnAcquire = false;
-    BackoffPolicy backoff{};                       // reconnect backoff
+    BackoffPolicy backoff{};  // reconnect backoff
     std::function<Clock::time_point()> now = [] { return Clock::now(); };
     std::chrono::milliseconds maintenanceInterval{1000};
     bool startMaintenanceThread = true;
-    obs::ObservabilityConfig observability{};      // default-null = no-op
-    std::size_t statementCacheSize = 64;  // per-connection prepared-stmt LRU; 0 disables
+    obs::ObservabilityConfig observability{};  // default-null = no-op
+    std::size_t statementCacheSize = 64;       // per-connection prepared-stmt LRU; 0 disables
 };
 
 namespace detail {
@@ -384,8 +384,8 @@ private:
     PoolConfig config_;
 
     mutable std::mutex mu_;
-    std::condition_variable cv_;        // signals idle availability to acquirers
-    std::condition_variable maint_cv_;  // wakes the reaper to stop
+    std::condition_variable cv_;                            // signals idle availability to acquirers
+    std::condition_variable maint_cv_;                      // wakes the reaper to stop
     std::vector<std::unique_ptr<detail::PoolSlot>> slots_;  // all (idle + active)
     std::deque<detail::PoolSlot*> idle_;
     bool stopping_ = false;

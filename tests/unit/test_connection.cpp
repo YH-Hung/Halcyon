@@ -88,8 +88,14 @@ TEST(ConnectionCache, RepeatedQueryReusesPreparedStatement) {
                                  /*statementCacheSize=*/8)
                     .value();
 
-    { auto r = conn.query("SELECT id FROM t WHERE age > ?", 21); ASSERT_TRUE(r.ok()); }
-    { auto r = conn.query("SELECT id FROM t WHERE age > ?", 21); ASSERT_TRUE(r.ok()); }
+    {
+        auto r = conn.query("SELECT id FROM t WHERE age > ?", 21);
+        ASSERT_TRUE(r.ok());
+    }
+    {
+        auto r = conn.query("SELECT id FROM t WHERE age > ?", 21);
+        ASSERT_TRUE(r.ok());
+    }
 
     EXPECT_EQ(driver.preparedSql.size(), 1u);  // prepared once, reused
 }
@@ -100,8 +106,14 @@ TEST(ConnectionCache, DisabledByDefaultPreparesEveryCall) {
     driver.resultSets.push_back({{"id"}, {}});
     auto conn = Connection::open(driver, ConnectionParams{"x"}).value();  // size 0
 
-    { auto r = conn.query("SELECT id FROM t WHERE age > ?", 21); ASSERT_TRUE(r.ok()); }
-    { auto r = conn.query("SELECT id FROM t WHERE age > ?", 21); ASSERT_TRUE(r.ok()); }
+    {
+        auto r = conn.query("SELECT id FROM t WHERE age > ?", 21);
+        ASSERT_TRUE(r.ok());
+    }
+    {
+        auto r = conn.query("SELECT id FROM t WHERE age > ?", 21);
+        ASSERT_TRUE(r.ok());
+    }
 
     EXPECT_EQ(driver.preparedSql.size(), 2u);  // no cache -> two prepares
 }
@@ -125,7 +137,9 @@ TEST(ConnectionCache, OverlappingCursorsOnSameSqlOverflow) {
 TEST(ConnectionCache, ExecuteErrorDropsEntry) {
     MockCliDriver driver;
     driver.executeErrors.push_back([] {
-        halcyon::Error e; e.code = halcyon::ErrorCode::Syntax; e.message = "boom";
+        halcyon::Error e;
+        e.code = halcyon::ErrorCode::Syntax;
+        e.message = "boom";
         return e;
     }());
     auto conn = Connection::open(driver, ConnectionParams{"x"},
@@ -133,9 +147,9 @@ TEST(ConnectionCache, ExecuteErrorDropsEntry) {
                     .value();
 
     auto bad = conn.execute("UPDATE t SET a = ? WHERE b = ?", 1, 2);
-    ASSERT_FALSE(bad.ok());                // first execute fails -> poisoned
+    ASSERT_FALSE(bad.ok());  // first execute fails -> poisoned
     auto ok = conn.execute("UPDATE t SET a = ? WHERE b = ?", 1, 2);
-    ASSERT_TRUE(ok.ok());                  // re-prepared after drop
+    ASSERT_TRUE(ok.ok());  // re-prepared after drop
 
     EXPECT_EQ(driver.preparedSql.size(), 2u);
 }
@@ -145,7 +159,9 @@ TEST(ConnectionCache, LazyFetchErrorDropsCachedEntry) {
     driver.resultSets.push_back({{"id"}, {{Value{std::int64_t{1}}}}});  // one row
     driver.resultSets.push_back({{"id"}, {}});                          // second query
     driver.fetchError = [] {
-        halcyon::Error e; e.code = halcyon::ErrorCode::Connection; e.message = "lost";
+        halcyon::Error e;
+        e.code = halcyon::ErrorCode::Connection;
+        e.message = "lost";
         return e;
     }();
     driver.failFetchOnCall = 1;  // first fetch() of the lazy cursor fails
@@ -159,7 +175,10 @@ TEST(ConnectionCache, LazyFetchErrorDropsCachedEntry) {
         for (auto& row : rs.value()) { (void)row; }  // iteration hits the fetch error
         EXPECT_FALSE(rs.value().ok());               // fetch error recorded
     }  // rs destroyed -> poisoned lease finalizes + drops the cached entry
-    { auto rs = conn.query("SELECT id FROM t"); ASSERT_TRUE(rs.ok()); }
+    {
+        auto rs = conn.query("SELECT id FROM t");
+        ASSERT_TRUE(rs.ok());
+    }
 
     EXPECT_EQ(driver.preparedSql.size(), 2u);  // entry was dropped -> re-prepared
 }

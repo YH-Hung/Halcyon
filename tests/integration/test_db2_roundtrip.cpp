@@ -74,7 +74,8 @@ TEST_F(Db2Integration, InsertSelectStructMapping) {
 
 TEST_F(Db2Integration, TupleIterationAndAnonymousParams) {
     ASSERT_TRUE(conn_->execute("INSERT INTO halcyon_people VALUES (?,?,?)", 10,
-                               std::string{"x"}, 1).ok());
+                               std::string{"x"}, 1)
+                    .ok());
     auto rs = conn_->query("SELECT id, name FROM halcyon_people WHERE id >= ?", 10);
     ASSERT_TRUE(rs.ok()) << rs.error().message;
     int count = 0;
@@ -161,7 +162,7 @@ TEST(Db2TypeMapping, BinaryDecimalTemporalRoundTrip) {
         auto [payload, amount, date, time, ts] =
             row.as<std::vector<std::byte>, halcyon::Decimal, halcyon::Date,
                    halcyon::Time, halcyon::Timestamp>();
-        EXPECT_EQ(payload, blob);  // byte-exact: the binary-read fix
+        EXPECT_EQ(payload, blob);                            // byte-exact: the binary-read fix
         EXPECT_EQ(amount, halcyon::Decimal{"12345.67800"});  // exact scale
         EXPECT_EQ(date, halcyon::Date{"2026-06-21"});
         EXPECT_EQ(time.value, "13:45:00");
@@ -264,7 +265,7 @@ TEST(Db2CacheIntegration, CachedStatementReuseReturnsCorrectRows) {
 
     halcyon::PoolConfig cfg;
     cfg.min = 1;
-    cfg.max = 1;                      // force a single reused physical connection
+    cfg.max = 1;  // force a single reused physical connection
     cfg.statementCacheSize = 8;
     auto db = halcyon::Database::open(*d, cfg);
     ASSERT_TRUE(db.ok()) << db.error().message;
@@ -276,7 +277,10 @@ TEST(Db2CacheIntegration, CachedStatementReuseReturnsCorrectRows) {
         auto qr = h.query(sql, 1);
         ASSERT_TRUE(qr.ok()) << qr.error().message;
         int got = 0, rows = 0;
-        for (auto& row : qr.value()) { got = std::get<0>(row.as<int>()); ++rows; }
+        for (auto& row : qr.value()) {
+            got = std::get<0>(row.as<int>());
+            ++rows;
+        }
         EXPECT_TRUE(qr.value().ok()) << "iteration ended on a fetch error";
         EXPECT_EQ(rows, 1);
         EXPECT_EQ(got, 1);
@@ -285,7 +289,10 @@ TEST(Db2CacheIntegration, CachedStatementReuseReturnsCorrectRows) {
         auto qr = h.query(sql, 2);  // re-binds + re-executes the cached statement
         ASSERT_TRUE(qr.ok()) << qr.error().message;
         int got = 0, rows = 0;
-        for (auto& row : qr.value()) { got = std::get<0>(row.as<int>()); ++rows; }
+        for (auto& row : qr.value()) {
+            got = std::get<0>(row.as<int>());
+            ++rows;
+        }
         EXPECT_TRUE(qr.value().ok()) << "iteration ended on a fetch error";
         EXPECT_EQ(rows, 1);
         EXPECT_EQ(got, 2);  // correct rows from the reused cursor

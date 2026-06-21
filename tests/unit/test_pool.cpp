@@ -84,7 +84,10 @@ TEST(PoolBasics, ReleasedConnectionIsReused) {
     cfg.min = 1;
     cfg.max = 2;
     auto pool = ConnectionPool::create(driver, {"x"}, cfg).value();
-    { auto pc = pool->acquire(); ASSERT_TRUE(pc.ok()); }
+    {
+        auto pc = pool->acquire();
+        ASSERT_TRUE(pc.ok());
+    }
     auto pc2 = pool->acquire();
     ASSERT_TRUE(pc2.ok());
     EXPECT_EQ(driver.connectCalls, 1);  // reused, not reconnected
@@ -190,7 +193,7 @@ TEST(PoolStatementCache, ReusesPreparedStatementAcrossAcquires) {
     driver.resultSets.push_back({{"id"}, {}});
     halcyon::PoolConfig cfg;
     cfg.min = 1;
-    cfg.max = 1;                       // single physical connection, reused
+    cfg.max = 1;  // single physical connection, reused
     cfg.startMaintenanceThread = false;
     cfg.statementCacheSize = 8;
     auto pool =
@@ -218,7 +221,7 @@ TEST(PoolStatementCache, ReconnectStartsWithFreshCache) {
     cfg.min = 1;
     cfg.max = 1;
     cfg.startMaintenanceThread = false;
-    cfg.validateOnAcquire = true;       // validate (isAlive) on each acquire
+    cfg.validateOnAcquire = true;  // validate (isAlive) on each acquire
     cfg.statementCacheSize = 8;
     auto pool =
         halcyon::ConnectionPool::create(driver, {"dsn"}, cfg).value();
@@ -230,8 +233,8 @@ TEST(PoolStatementCache, ReconnectStartsWithFreshCache) {
     }
     driver.aliveResults.push_back(false);  // next acquire sees a dead connection
     {
-        auto lease = pool->acquire().value();             // reconnect -> new Connection
-        auto r = lease->query("SELECT id FROM t", 1);     // prepare #2 (fresh cache)
+        auto lease = pool->acquire().value();          // reconnect -> new Connection
+        auto r = lease->query("SELECT id FROM t", 1);  // prepare #2 (fresh cache)
         ASSERT_TRUE(r.ok());
     }
 

@@ -28,7 +28,7 @@ class StatementCache;  // fwd
 //    is finalized and dropped).
 //  - transient: owns the handle outright; on release it is finalized.
 class StatementLease {
-  public:
+public:
     StatementLease() = default;
 
     StatementLease(StatementLease&& o) noexcept { move_from(o); }
@@ -46,7 +46,7 @@ class StatementLease {
     cli::StatementHandle handle() const noexcept { return handle_; }
     void poison() noexcept { poisoned_ = true; }
 
-  private:
+private:
     friend class StatementCache;
 
     // Transient lease factory: owns the handle and finalizes it on release.
@@ -88,7 +88,7 @@ class StatementLease {
 // NOT movable (leases hold raw pointers into it); Connection owns it via a
 // unique_ptr so its address is stable across Connection moves.
 class StatementCache {
-  public:
+public:
     StatementCache(cli::ICliDriver& driver, cli::ConnectionHandle conn,
                    std::size_t capacity, obs::MetricsSink* metrics = nullptr)
         : driver_(&driver), conn_(conn), capacity_(capacity), metrics_(metrics) {}
@@ -140,7 +140,7 @@ class StatementCache {
         return make_cached(&lru_.front());
     }
 
-  private:
+private:
     friend class StatementLease;
 
     StatementLease make_cached(StmtCacheEntry* e) {

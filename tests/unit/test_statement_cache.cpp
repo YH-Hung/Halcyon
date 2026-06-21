@@ -18,7 +18,7 @@ namespace {
 // Minimal recording sink: counts counter samples by (name, result-label) and
 // remembers the last gauge value per name.
 class RecordingSink : public halcyon::obs::MetricsSink {
-  public:
+public:
     void counter(std::string_view n, double v,
                  const halcyon::obs::Labels& l) override {
         std::string key{n};
@@ -47,8 +47,14 @@ TEST(StatementCache, MissThenHitPreparesOnce) {
     StatementCache cache(driver, open_conn(driver), /*capacity=*/8);
     const std::string sql = "SELECT 1 FROM SYSIBM.SYSDUMMY1";
 
-    { auto l1 = cache.acquire(sql); ASSERT_TRUE(l1.ok()); }  // miss, released
-    { auto l2 = cache.acquire(sql); ASSERT_TRUE(l2.ok()); }  // hit, released
+    {
+        auto l1 = cache.acquire(sql);
+        ASSERT_TRUE(l1.ok());
+    }  // miss, released
+    {
+        auto l2 = cache.acquire(sql);
+        ASSERT_TRUE(l2.ok());
+    }  // hit, released
 
     EXPECT_EQ(driver.preparedSql.size(), 1u);  // prepared once, reused
     EXPECT_EQ(driver.finalizeCalls, 0);        // cached, not finalized
@@ -60,8 +66,14 @@ TEST(StatementCache, CapacityZeroIsAlwaysTransient) {
     StatementCache cache(driver, open_conn(driver), /*capacity=*/0);
     const std::string sql = "SELECT 1";
 
-    { auto l = cache.acquire(sql); ASSERT_TRUE(l.ok()); }
-    { auto l = cache.acquire(sql); ASSERT_TRUE(l.ok()); }
+    {
+        auto l = cache.acquire(sql);
+        ASSERT_TRUE(l.ok());
+    }
+    {
+        auto l = cache.acquire(sql);
+        ASSERT_TRUE(l.ok());
+    }
 
     EXPECT_EQ(driver.preparedSql.size(), 2u);  // no reuse
     EXPECT_EQ(driver.finalizeCalls, 2);        // each transient finalized
@@ -92,8 +104,8 @@ TEST(StatementCache, BusyHitServesTransientOverflow) {
     auto l2 = cache.acquire(sql);  // same sql while busy -> transient
     ASSERT_TRUE(l2.ok());
 
-    EXPECT_EQ(driver.preparedSql.size(), 2u);              // one cached + one transient
-    EXPECT_NE(l1.value().handle(), l2.value().handle());   // distinct handles
+    EXPECT_EQ(driver.preparedSql.size(), 2u);             // one cached + one transient
+    EXPECT_NE(l1.value().handle(), l2.value().handle());  // distinct handles
 }
 
 TEST(StatementCache, PoisonDropsEntry) {
@@ -101,9 +113,16 @@ TEST(StatementCache, PoisonDropsEntry) {
     StatementCache cache(driver, open_conn(driver), /*capacity=*/8);
     const std::string sql = "SELECT 1";
 
-    { auto l = cache.acquire(sql); ASSERT_TRUE(l.ok()); l.value().poison(); }
+    {
+        auto l = cache.acquire(sql);
+        ASSERT_TRUE(l.ok());
+        l.value().poison();
+    }
     EXPECT_EQ(driver.finalizeCalls, 1);  // poisoned entry finalized on release
-    { auto l = cache.acquire(sql); ASSERT_TRUE(l.ok()); }  // re-prepared
+    {
+        auto l = cache.acquire(sql);
+        ASSERT_TRUE(l.ok());
+    }  // re-prepared
     EXPECT_EQ(driver.preparedSql.size(), 2u);
 }
 
@@ -112,14 +131,22 @@ TEST(StatementCache, CloseFailureDropsEntry) {
     StatementCache cache(driver, open_conn(driver), /*capacity=*/8);
     const std::string sql = "SELECT 1";
     driver.closeCursorErrors.push_back([] {
-        halcyon::Error e; e.code = halcyon::ErrorCode::Connection;
+        halcyon::Error e;
+        e.code = halcyon::ErrorCode::Connection;
         e.message = "reset failed";
         return e;
     }());
 
-    { auto l = cache.acquire(sql); ASSERT_TRUE(l.ok()); }  // miss; release closeCursor fails
+    // Miss; release closeCursor fails.
+    {
+        auto l = cache.acquire(sql);
+        ASSERT_TRUE(l.ok());
+    }
     EXPECT_EQ(driver.finalizeCalls, 1);  // half-reset handle dropped, not reused
-    { auto l = cache.acquire(sql); ASSERT_TRUE(l.ok()); }  // re-prepared
+    {
+        auto l = cache.acquire(sql);
+        ASSERT_TRUE(l.ok());
+    }  // re-prepared
     EXPECT_EQ(driver.preparedSql.size(), 2u);
 }
 

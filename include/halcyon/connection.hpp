@@ -20,7 +20,7 @@
 
 namespace halcyon {
 
-class ResultSet;   // fwd
+class ResultSet;    // fwd
 class Transaction;  // fwd (defined in transaction.hpp)
 
 // A non-owning view of the current cursor row. Valid only at the iterator's
@@ -60,10 +60,18 @@ private:
             if (!ok) return;
             constexpr std::size_t i = decltype(idx)::value;
             auto cell = driver_->getColumn(stmt_, i);
-            if (!cell.ok()) { ok = false; err = cell.error(); return; }
+            if (!cell.ok()) {
+                ok = false;
+                err = cell.error();
+                return;
+            }
             using F = std::remove_pointer_t<decltype(slot)>;
             auto v = TypeBinder<F>::from_value(cell.value());
-            if (!v.ok()) { ok = false; err = v.error(); return; }
+            if (!v.ok()) {
+                ok = false;
+                err = v.error();
+                return;
+            }
             *slot = std::move(v.value());
         };
         (step(std::integral_constant<std::size_t, I>{}, &std::get<I>(out)), ...);
@@ -168,7 +176,10 @@ public:
 
         const Row& operator*() const { return *row_; }
         const Row* operator->() const { return &*row_; }
-        iterator& operator++() { advance(); return *this; }
+        iterator& operator++() {
+            advance();
+            return *this;
+        }
         bool operator==(const iterator& o) const noexcept { return at_end_ == o.at_end_; }
         bool operator!=(const iterator& o) const noexcept { return !(*this == o); }
 
@@ -210,7 +221,7 @@ private:
     detail::cli::ICliDriver* driver_;
     detail::cli::StatementHandle stmt_;
     std::size_t columns_;
-    std::optional<Error> error_;      // set if a fetch failed mid-iteration
+    std::optional<Error> error_;                   // set if a fetch failed mid-iteration
     std::optional<detail::StatementLease> lease_;  // owns the cached/transient stmt
 };
 
