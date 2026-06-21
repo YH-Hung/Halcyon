@@ -61,3 +61,47 @@ TEST(FakeDriverTest, StatementOnDeadConnectionErrors) {
     ASSERT_TRUE(d.disconnect(c).ok());
     EXPECT_FALSE(d.execute(s).ok());  // use after the connection died
 }
+
+#include <atomic>
+
+#include "workload_runner.hpp"
+
+using halcyon::stress::RunConfig;
+using halcyon::stress::RunReport;
+using halcyon::stress::Stop;
+using halcyon::stress::WorkerCtx;
+using halcyon::stress::Workload;
+using halcyon::stress::run_workload;
+
+TEST(WorkloadRunnerTest, RunsExactlyTotalIterationsAcrossThreads) {
+    std::atomic<long> ops{0};
+    Workload w{"count", [&](WorkerCtx&) { ++ops; }};
+    RunConfig cfg;
+    cfg.threads = 4;
+    cfg.stop.total_iters = 4000;
+    RunReport r = run_workload(w, cfg);
+    EXPECT_EQ(ops.load(), 4000);
+    EXPECT_EQ(r.ops, 4000u);
+    EXPECT_FALSE(r.failed);
+    EXPECT_EQ(r.hist.count(), 4000u);
+}
+
+TEST(WorkloadRunnerTest, SurfacesWorkerFailure) {
+    Workload w{"boom", [](WorkerCtx& ctx) { ctx.fail("kaboom"); }};
+    RunConfig cfg;
+    cfg.threads = 2;
+    cfg.stop.total_iters = 10;
+    RunReport r = run_workload(w, cfg);
+    EXPECT_TRUE(r.failed);
+    EXPECT_EQ(r.first_error, "kaboom");
+}
+
+TEST(WorkloadRunnerTest, DurationModeRunsAndReportsThroughput) {
+    Workload w{"spin", [](WorkerCtx&) {}};
+    RunConfig cfg;
+    cfg.threads = 2;
+    cfg.stop.duration = std::chrono::milliseconds(50);
+    RunReport r = run_workload(w, cfg);
+    EXPECT_GT(r.ops, 0u);
+    EXPECT_GT(r.throughput_per_sec(), 0.0);
+}
