@@ -72,6 +72,11 @@ public:
     // Releases a statement handle. Idempotent for already-finalized handles.
     virtual Result<void> finalize(StatementHandle stmt) = 0;
 
+    // Closes any open cursor on stmt and resets it so it can be re-bound and
+    // re-executed. Idempotent when no cursor is open. Required to reuse a cached
+    // prepared statement that previously produced a result set.
+    virtual Result<void> closeCursor(StatementHandle stmt) = 0;
+
     // --- Transaction control (Plan 4) ---
 
     // Enables/disables autocommit on the connection. A transaction begins by

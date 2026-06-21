@@ -106,3 +106,16 @@ TEST(CliSeamStatement, PrepareErrorIsScriptable) {
     ASSERT_FALSE(st.ok());
     EXPECT_EQ(st.error().code, ErrorCode::Syntax);
 }
+
+TEST(CliSeamStatement, CloseCursorIsCallableAndIdempotent) {
+    MockCliDriver driver;
+    auto conn = driver.connect(ConnectionParams{"x"}).value();
+    auto st = driver.prepare(conn, "SELECT id FROM t").value();
+
+    auto a = driver.closeCursor(st);
+    auto b = driver.closeCursor(st);  // idempotent: no open cursor
+
+    EXPECT_TRUE(a.ok());
+    EXPECT_TRUE(b.ok());
+    EXPECT_EQ(driver.closeCursorCalls, 2);
+}

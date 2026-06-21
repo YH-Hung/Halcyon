@@ -330,6 +330,18 @@ public:
         return Result<void>();
     }
 
+    Result<void> closeCursor(StatementHandle stmt) override {
+        StmtState* st = stmt_state(stmt);
+        if (!st) return Result<void>();  // unknown/finalized handle: no-op
+        SQLRETURN rc = SQLFreeStmt(st->handle, SQL_CLOSE);
+        // SQL_SUCCESS_WITH_INFO / "no cursor open" are benign; only a hard error
+        // is reported. cli_ok() accepts SUCCESS and SUCCESS_WITH_INFO.
+        if (!cli_ok(rc))
+            return make_error(SQL_HANDLE_STMT, st->handle, ErrorCode::Unknown,
+                              "SQLFreeStmt(SQL_CLOSE) failed");
+        return Result<void>();
+    }
+
     Result<void> setAutoCommit(ConnectionHandle conn, bool enabled) override {
         SQLHDBC dbc = conn_handle(conn);
         if (dbc == SQL_NULL_HANDLE) return unknown_conn();
