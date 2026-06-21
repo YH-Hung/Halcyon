@@ -150,3 +150,23 @@ TEST(StressScenario, ExecutorSaturationResolvesEveryFuture) {
     EXPECT_EQ(r.ops, 8000u);          // every op (a launched+awaited future) done
     EXPECT_EQ(db.value().pool().active_count(), 0u);
 }
+
+using halcyon::stress::make_cache_churn;
+
+TEST(StressScenario, StatementCacheStaysCorrectUnderReuse) {
+    auto fake = std::make_shared<ConcurrentFakeDriver>();
+    auto db = Database::open(fake, "dsn", config_for(ScenarioId::Cache, 2));
+    ASSERT_TRUE(db.ok()) << db.error().message;
+
+    Workload w = make_cache_churn(db.value());
+    RunConfig cfg;
+    cfg.threads = 8;
+    cfg.stop.total_iters = 20000;
+    RunReport r = run_workload(w, cfg);
+
+    EXPECT_FALSE(r.failed) << r.first_error;
+    // Reuse really happened: far fewer prepares than executes (a warm cache on a
+    // reused connection re-prepares only on miss/overflow, not per call).
+    EXPECT_LT(fake->prepareCalls.load(), fake->executeCalls.load());
+    EXPECT_EQ(db.value().pool().active_count(), 0u);
+}

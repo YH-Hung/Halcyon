@@ -110,4 +110,21 @@ inline Workload make_executor_saturation(Database& db) {
     }};
 }
 
+// --- Scenario 3: statement-cache correctness under reuse ---
+// A small rotating set of SQL strings on few connections (cache enabled) so hits,
+// the busy->overflow path (same SQL concurrently), and eviction all occur. Each op
+// asserts the scalar matches the SQL it sent (proves no cross-thread row mixup).
+inline Workload make_cache_churn(Database& db) {
+    return Workload{"cache", [&db](WorkerCtx& ctx) {
+        std::int64_t n = 1 + static_cast<std::int64_t>(ctx.rng() % 3);  // 1..3
+        auto r = db.queryAs<One>(select_n(n));
+        if (!r.ok()) {
+            ctx.fail("cache query failed: " + r.error().message);
+            return;
+        }
+        if (r.value().size() != 1 || r.value()[0].v != n)
+            ctx.fail("wrong scalar from cached query");
+    }};
+}
+
 }  // namespace halcyon::stress
