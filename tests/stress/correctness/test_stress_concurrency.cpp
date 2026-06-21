@@ -275,11 +275,44 @@ TEST(StressScenario, TransactionChurnCommitsAndRollbacksBalance) {
 
 // Scenario 6 reuses make_pool_contention (already in scope) under reaper pressure.
 
+// Captures every halcyon_pool_connections{state=active|idle} gauge sample the pool
+// emits during the run so the reaper invariants can be checked over the whole run,
+// not just at a final quiescent snapshot. Each sample is a consistent point-in-time
+// (the pool computes active = slots - idle under its lock). Thread-safe: the
+// maintenance thread keeps emitting after the workload joins.
+struct PoolGaugeSink final : halcyon::obs::MetricsSink {
+    std::mutex mu;
+    long samples = 0;
+    double min_active = 1e18, max_active = -1.0, min_idle = 1e18;
+
+    void counter(std::string_view, double, const halcyon::obs::Labels&) override {}
+    void histogram(std::string_view, double,
+                   const halcyon::obs::Labels&) override {}
+    void gauge(std::string_view name, double value,
+               const halcyon::obs::Labels& labels) override {
+        if (name != "halcyon_pool_connections") return;
+        std::string_view state;
+        for (const auto& kv : labels)
+            if (kv.first == "state") state = kv.second;
+        std::lock_guard<std::mutex> lk(mu);
+        ++samples;
+        if (state == "active") {
+            if (value < min_active) min_active = value;
+            if (value > max_active) max_active = value;
+        } else if (state == "idle") {
+            if (value < min_idle) min_idle = value;
+        }
+    }
+};
+
 TEST(StressScenario, ReaperRacesAcquireReleaseSafely) {
     auto fake = std::make_shared<ConcurrentFakeDriver>();
+    auto gauge = std::make_shared<PoolGaugeSink>();
     // Lifecycle config: maintenance thread on, tiny intervals so the reaper fires
     // constantly while acquires/releases race it.
-    auto db = Database::open(fake, "dsn", config_for(ScenarioId::Lifecycle, 6));
+    halcyon::PoolConfig pc = config_for(ScenarioId::Lifecycle, 6);
+    pc.observability.metrics = gauge;
+    auto db = Database::open(fake, "dsn", pc);
     ASSERT_TRUE(db.ok()) << db.error().message;
 
     Workload w = make_pool_contention(db.value());  // acquire/query/release loop
@@ -293,6 +326,18 @@ TEST(StressScenario, ReaperRacesAcquireReleaseSafely) {
     EXPECT_EQ(db.value().pool().active_count(), 0u);
     EXPECT_GE(db.value().pool().total_count(),
               db.value().pool().idle_count());           // accounting consistent
+
+    // Reaper/gauge invariants over the WHOLE run (§6.6). The maintenance thread is
+    // still emitting, so read the captured extrema under the sink's lock.
+    std::lock_guard<std::mutex> lk(gauge->mu);
+    EXPECT_GT(gauge->samples, 0);          // the gauge was actually exercised
+    EXPECT_GE(gauge->min_active, 0.0);     // active count is never negative
+    EXPECT_LE(gauge->max_active, 6.0);     // reaper/acquire never exceed pool max
+    EXPECT_GE(gauge->min_idle, 0.0);       // idle count is never negative
+    // NOTE: total >= min is deliberately NOT asserted at a single snapshot. With
+    // maxLifetime=5ms the reaper legitimately evicts a connection even at/below min
+    // and refills afterwards (see ConnectionPool::maintain), so total transiently
+    // dips below min by design; a point-in-time total >= min check would be flaky.
 }
 
 TEST(StressScenario, DestroyDatabaseWithInflightAsyncWork) {
