@@ -251,3 +251,43 @@ TEST(Db2FacadeIntegration, ErgonomicOpenBatchAndAsync) {
 
     h.execute("DROP TABLE halcyon_batch");
 }
+
+// Exercises the real closeCursor-based reuse path the mock cannot: with a single
+// reused physical connection and a warm statement cache, the SAME SELECT run
+// twice with different params must reuse the cached prepared statement and still
+// return the correct rows. Each query is scoped so its result set (and thus the
+// cache lease) is released before the next acquire — only then does the second
+// call hit the cached statement and re-execute it after closing the first cursor.
+TEST(Db2CacheIntegration, CachedStatementReuseReturnsCorrectRows) {
+    auto d = dsn();
+    if (!d) GTEST_SKIP() << "HALCYON_TEST_DSN not set; skipping live Db2 test";
+
+    halcyon::PoolConfig cfg;
+    cfg.min = 1;
+    cfg.max = 1;                      // force a single reused physical connection
+    cfg.statementCacheSize = 8;
+    auto db = halcyon::Database::open(*d, cfg);
+    ASSERT_TRUE(db.ok()) << db.error().message;
+    auto& h = db.value();
+
+    const std::string sql = "SELECT CAST(? AS INTEGER) FROM SYSIBM.SYSDUMMY1";
+
+    {
+        auto qr = h.query(sql, 1);
+        ASSERT_TRUE(qr.ok()) << qr.error().message;
+        int got = 0, rows = 0;
+        for (auto& row : qr.value()) { got = std::get<0>(row.as<int>()); ++rows; }
+        EXPECT_TRUE(qr.value().ok()) << "iteration ended on a fetch error";
+        EXPECT_EQ(rows, 1);
+        EXPECT_EQ(got, 1);
+    }  // qr destroyed -> lease returned to cache, first cursor closed
+    {
+        auto qr = h.query(sql, 2);  // re-binds + re-executes the cached statement
+        ASSERT_TRUE(qr.ok()) << qr.error().message;
+        int got = 0, rows = 0;
+        for (auto& row : qr.value()) { got = std::get<0>(row.as<int>()); ++rows; }
+        EXPECT_TRUE(qr.value().ok()) << "iteration ended on a fetch error";
+        EXPECT_EQ(rows, 1);
+        EXPECT_EQ(got, 2);  // correct rows from the reused cursor
+    }
+}
