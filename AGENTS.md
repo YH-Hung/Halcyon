@@ -62,6 +62,22 @@ and tests run without setting `LD_LIBRARY_PATH`/`DYLD_LIBRARY_PATH`. On macOS,
 `@rpath/libdb2.dylib` at configure time (idempotent) so the RPATH actually
 resolves it — dyld does not search RPATH for bare dependent names.
 
+### Concurrency stress & performance suite (opt-in)
+
+Build with `-DHALCYON_BUILD_STRESS_TESTS=ON`. The correctness suite is a CTest
+target labeled `stress`; build it under a sanitizer and run it to verify
+race/deadlock freedom:
+
+```bash
+cmake -S . -B build -DHALCYON_BUILD_TESTS=ON \
+      -DHALCYON_BUILD_STRESS_TESTS=ON -DHALCYON_SANITIZER=thread
+cmake --build build -j
+ctest --test-dir build -L stress --output-on-failure
+./build/tests/stress/halcyon_stress --scenario=all --threads=1,2,4,8,16   # perf report
+```
+
+See `tests/stress/README.md` for details.
+
 ### Integration tests against live Db2 (Docker)
 
 The integration suite (`tests/integration/`, CTest label `integration`) is
