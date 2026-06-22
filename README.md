@@ -203,6 +203,7 @@ tests/
 cmake/                    FindDB2CLI.cmake, package config
 third_party/clidriver/    Vendored IBM Db2 CLI driver (gitignored)
 examples/                 OO and functional usage samples
+samples/orders/           Standalone consumer sample (find_package + local Db2)
 docker/                   Db2 Compose for integration tests
 docs/superpowers/
   specs/                  Design specification
