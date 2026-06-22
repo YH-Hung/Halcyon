@@ -13,9 +13,15 @@ for f in schema.sql seed.sql; do
     echo "==> loading ${f}"
     "${COMPOSE[@]}" cp "${SCRIPT_DIR}/sql/${f}" "${SERVICE}:/tmp/${f}"
     # db2 -tvf exits 4 when any statement fails (e.g. DROP on a non-existent table);
-    # that is expected on a fresh database and is harmless, so we allow non-zero exits.
+    # exit 4 (statement-level failure) is tolerated on a fresh database, but other
+    # non-zero exits (syntax error, type mismatch, etc.) are fatal.
+    rc=0
     "${COMPOSE[@]}" exec -T "${SERVICE}" \
-        su - db2inst1 -c "{ echo 'CONNECT TO SAMPLE;'; cat /tmp/${f}; } > /tmp/_run.sql && db2 -tvf /tmp/_run.sql" || true
+        su - db2inst1 -c "{ echo 'CONNECT TO SAMPLE;'; cat /tmp/${f}; } > /tmp/_run.sql && db2 -tvf /tmp/_run.sql" || rc=$?
+    if (( rc != 0 && rc != 4 )); then
+        echo "==> ERROR: db2 exited ${rc} on ${f}" >&2
+        exit 1
+    fi
 done
 
 echo "==> done"
