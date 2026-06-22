@@ -17,8 +17,20 @@ transaction → re-query. Shared row structs and SQL live in
 
 - Docker (the repo's `docker/docker-compose.yml` provides Db2 `SAMPLE`).
 - A Halcyon install prefix (see step 3).
-- The vendored CLI driver at `third_party/clidriver` (see the repo `AGENTS.md`;
-  on macOS run the one-time `xattr -r -d com.apple.quarantine third_party/clidriver`).
+- The vendored CLI driver at `third_party/clidriver` (see the repo `AGENTS.md`).
+  On macOS, clear Gatekeeper quarantine on the driver once before building:
+
+  ```bash
+  chmod -R u+w third_party/clidriver
+  xattr -r -d com.apple.quarantine third_party/clidriver
+  ```
+
+  The `chmod` must come first: some bundled GSKit libraries under `lib/icc/`
+  (e.g. `libgsk8sys.dylib`) ship read-only, and `xattr -d` cannot strip the
+  attribute from a non-writable file. If any `icc/` lib stays quarantined the
+  sample builds fine but fails at connect time with `SQL1042C`. Verify with
+  `find third_party/clidriver/lib/icc -name '*.dylib' -exec xattr {} \;`
+  (no output = clean).
 
 ## 1. Start Db2
 
