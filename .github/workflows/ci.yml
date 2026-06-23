@@ -1,0 +1,177 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# Cancel superseded runs on the same ref (e.g. force-pushes to a PR).
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Formatting + static analysis. clang-format is authoritative for style;
+  # clang-tidy runs against the real compile_commands.json so it sees the seam.
+  # ---------------------------------------------------------------------------
+  lint:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install tooling
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            clang-format-18 clang-tidy-18 cmake ninja-build
+          sudo update-alternatives --install /usr/bin/clang-format clang-format \
+            /usr/bin/clang-format-18 100
+          sudo update-alternatives --install /usr/bin/clang-tidy clang-tidy \
+            /usr/bin/clang-tidy-18 100
+
+      - name: clang-format (check only)
+        run: |
+          mapfile -t files < <(find include src tests examples \
+            \( -name '*.hpp' -o -name '*.cpp' \) -type f)
+          printf '%s\n' "${files[@]}"
+          clang-format --dry-run --Werror "${files[@]}"
+
+      # clang-tidy needs the headers + libdb2 present so the seam translation
+      # unit compiles.
+      - name: Set up Db2 CLI driver
+        uses: ./.github/actions/setup-db2-clidriver
+
+      - name: Configure (for compile_commands.json)
+        run: cmake -S . -B build -G Ninja -DHALCYON_BUILD_TESTS=ON
+
+      - name: clang-tidy
+        run: |
+          mapfile -t files < <(find src include -name '*.cpp' -type f)
+          clang-tidy -p build "${files[@]}"
+
+  # ---------------------------------------------------------------------------
+  # Build + unit tests across compilers. No live DB: the unit + smoke tests
+  # mock the seam, and integration tests report Skipped without HALCYON_TEST_DSN.
+  # ---------------------------------------------------------------------------
+  build-test:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler:
+          - { name: gcc,   cc: gcc-13,   cxx: g++-13 }
+          - { name: clang, cc: clang-18, cxx: clang++-18 }
+    name: build-test (${{ matrix.compiler.name }})
+    env:
+      CC: ${{ matrix.compiler.cc }}
+      CXX: ${{ matrix.compiler.cxx }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            cmake ninja-build ${{ matrix.compiler.cc }}
+
+      - name: Set up Db2 CLI driver
+        uses: ./.github/actions/setup-db2-clidriver
+
+      - name: Configure
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DHALCYON_BUILD_TESTS=ON \
+            -DHALCYON_BUILD_EXAMPLES=ON \
+            -DHALCYON_WARNINGS_AS_ERRORS=ON
+
+      - name: Build
+        run: cmake --build build -j
+
+      # Excludes the integration label; those need a live Db2 (see integration job).
+      - name: Test (unit + smoke)
+        run: ctest --test-dir build -LE integration --output-on-failure
+
+  # ---------------------------------------------------------------------------
+  # Concurrency correctness under ThreadSanitizer. Mocks the seam, no live DB.
+  # ---------------------------------------------------------------------------
+  stress-tsan:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            cmake ninja-build clang-18
+
+      - name: Set up Db2 CLI driver
+        uses: ./.github/actions/setup-db2-clidriver
+
+      - name: Configure (TSan)
+        env:
+          CC: clang-18
+          CXX: clang++-18
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DHALCYON_BUILD_TESTS=ON \
+            -DHALCYON_BUILD_STRESS_TESTS=ON \
+            -DHALCYON_SANITIZER=thread
+
+      - name: Build
+        run: cmake --build build -j
+
+      - name: Stress (correctness)
+        run: ctest --test-dir build -L stress --output-on-failure
+
+  # ---------------------------------------------------------------------------
+  # Integration tests against a live Db2. The community image needs a privileged
+  # container, which GitHub `services:` cannot provide, so we drive the repo's
+  # compose file directly and wait for the SAMPLE database to come up healthy.
+  # ---------------------------------------------------------------------------
+  integration:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            cmake ninja-build g++-13
+
+      - name: Set up Db2 CLI driver
+        uses: ./.github/actions/setup-db2-clidriver
+
+      - name: Configure
+        env:
+          CC: gcc-13
+          CXX: g++-13
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DHALCYON_BUILD_TESTS=ON \
+            -DHALCYON_BUILD_INTEGRATION_TESTS=ON
+
+      - name: Build
+        run: cmake --build build -j
+
+      # First boot creates SAMPLE (~2 min). --wait blocks until healthy.
+      - name: Start Db2
+        run: |
+          docker compose -f docker/docker-compose.yml up -d --wait --wait-timeout 600
+
+      - name: Integration tests
+        env:
+          HALCYON_TEST_DSN: DATABASE=SAMPLE;HOSTNAME=localhost;PORT=50000;UID=db2inst1;PWD=halcyon;
+        run: ctest --test-dir build -L integration --output-on-failure
+
+      - name: Db2 logs (on failure)
+        if: failure()
+        run: docker compose -f docker/docker-compose.yml logs --no-color
+
+      - name: Tear down Db2
+        if: always()
+        run: docker compose -f docker/docker-compose.yml down -v

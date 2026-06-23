@@ -1,0 +1,38 @@
+name: Set up Db2 CLI driver
+description: >
+  Fetch, verify, and cache the IBM Db2 CLI driver (clidriver) into
+  third_party/clidriver. The driver is IBM's redistributable (not part of this
+  repo, hence gitignored), so CI downloads it instead of vendoring it.
+
+inputs:
+  url:
+    description: Tarball URL (IBM publishes only a rolling "latest" for linux x64).
+    default: https://public.dhe.ibm.com/ibmdl/export/pub/software/data/db2/drivers/odbc_cli/linuxx64_odbc_cli.tar.gz
+  sha256:
+    description: >
+      Expected SHA256 of the tarball. Because the URL above is a moving target,
+      this pin makes the build reproducible and tamper-evident: when IBM rotates
+      the file the checksum check fails loudly — review the new driver, then
+      update this value (a fresh checksum also rotates the cache key).
+    default: 2c10efc71a638cd6b07a5b977b6dbe8aa0408e1dca825bea0d2b63318c9bba2f
+
+runs:
+  using: composite
+  steps:
+    - name: Restore cached driver
+      id: cache
+      uses: actions/cache@v4
+      with:
+        path: third_party/clidriver
+        key: clidriver-${{ inputs.sha256 }}
+
+    - name: Download, verify, extract
+      if: steps.cache.outputs.cache-hit != 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+        mkdir -p third_party
+        curl -fSL "${{ inputs.url }}" -o /tmp/clidriver.tar.gz
+        echo "${{ inputs.sha256 }}  /tmp/clidriver.tar.gz" | sha256sum -c -
+        tar -xzf /tmp/clidriver.tar.gz -C third_party
+        test -f third_party/clidriver/include/sqlcli1.h
