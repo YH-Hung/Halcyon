@@ -88,10 +88,14 @@ db.executeBatch("INSERT INTO events(ts, kind) VALUES (?,?)", batchOf(eventRows))
 
 ```bash
 # Configure (tests enabled by default)
-cmake -S . -B build -DHALCYON_BUILD_TESTS=ON
+export MY_INSTALL_DIR=$HOME/.local
+cmake -S . -B build -DHALCYON_BUILD_TESTS=ON -DCMAKE_INSTALL_PREFIX=$MY_INSTALL_DIR
 
 # Build
 cmake --build build -j
+
+# Install
+cmake --install build
 
 # Run unit tests (no live database needed)
 ctest --test-dir build --output-on-failure

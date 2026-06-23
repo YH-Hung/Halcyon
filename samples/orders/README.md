@@ -39,6 +39,16 @@ docker compose -f ../../docker/docker-compose.yml up -d
 docker compose -f ../../docker/docker-compose.yml ps   # wait for STATUS = healthy
 ```
 
+Or, without Compose:
+
+```bash
+docker run -d --name halcyon-db2 --privileged \
+  -e LICENSE=accept -e DB2INST1_PASSWORD=halcyon \
+  -e DBNAME=SAMPLE -e PERSISTENT_HOME=false \
+  -p 50000:50000 \
+  icr.io/db2_community/db2:11.5.9.0
+```
+
 The first boot creates `SAMPLE` (~2 min native; longer under amd64 emulation).
 
 ## 2. Load the schema and seed data
@@ -58,6 +68,17 @@ docker compose -f ../../docker/docker-compose.yml exec db2 \
 # …repeat for seed.sql
 ```
 
+Or, without Compose (using the `halcyon-db2` container from step 1):
+
+```bash
+docker cp sql/schema.sql halcyon-db2:/tmp/schema.sql
+docker cp sql/seed.sql halcyon-db2:/tmp/seed.sql
+docker exec halcyon-db2 \
+  su - db2inst1 -c "{ echo 'CONNECT TO SAMPLE;'; cat /tmp/schema.sql; } > /tmp/run.sql && db2 -tvf /tmp/run.sql"
+docker exec halcyon-db2 \
+  su - db2inst1 -c "{ echo 'CONNECT TO SAMPLE;'; cat /tmp/seed.sql; } > /tmp/run.sql && db2 -tvf /tmp/run.sql"  
+```
+
 Apple `container` users: there is no Compose; use `container cp` and
 `container exec halcyon-db2 bash -lc 'su - db2inst1 -c ". ~/sqllib/db2profile; { echo CONNECT TO SAMPLE\;; cat /tmp/schema.sql; } > /tmp/run.sql && db2 -tvf /tmp/run.sql"'`
 (see `docker/README.md`). Note: Db2's image is amd64-only and does not start
@@ -68,17 +89,18 @@ under Apple `container` on Apple silicon — use Docker there.
 First, build and install Halcyon to a prefix from the Halcyon repo root:
 
 ```bash
-# From the Halcyon repo root: build and install Halcyon to a prefix.
-cmake -S . -B build
+# From the Halcyon repo root: build and install Halcyon
+export MY_INSTALL_DIR=$HOME/.local
+cmake -S . -B build -DCMAKE_INSTALL_PREFIX=$MY_INSTALL_DIR
 cmake --build build -j
-cmake --install build --prefix build/install
+cmake --install build
 ```
 
 Then configure and build the sample:
 
 ```bash
 cmake -S . -B build \
-  -DCMAKE_PREFIX_PATH=<halcyon-repo>/build/install \
+  -DCMAKE_PREFIX_PATH=$HOME/.local \
   -DDB2_CLIDRIVER_ROOT=<halcyon-repo>/third_party/clidriver
 cmake --build build -j
 ```
