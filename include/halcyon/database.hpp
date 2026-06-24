@@ -441,16 +441,21 @@ public:
     template <class... Args>
     std::future<Result<std::int64_t>> executeAsync(const std::string& sql,
                                                    Args... args) {
+        auto parent = has_tracer_ ? tracer_->captureContext()
+                                  : std::shared_ptr<obs::SpanContext>{};
         return exec_->submit(
-            [pool = pool_, attempts = default_attempts_, sql, args...]() {
+            [pool = pool_, attempts = default_attempts_,
+             parent = std::move(parent), sql, args...]() {
                 return instrument(
                     pool->metrics(), pool->tracer(), pool->metrics_enabled(),
-                    pool->tracer_enabled(), "halcyon.execute", sql, [&] {
+                    pool->tracer_enabled(), "halcyon.execute", sql,
+                    [&] {
                         return run_with_policy_on(
                             *pool, default_policy_for(*pool, attempts, sql),
                             [&](Connection& c) { return c.execute(sql, args...); },
                             pool->metrics(), pool->metrics_enabled());
-                    });
+                    },
+                    parent.get());
             });
     }
     // Typed async query (spec §5): materializes rows into std::vector<T> so the
@@ -459,18 +464,23 @@ public:
     template <class T, class... Args>
     std::future<Result<std::vector<T>>> queryAsync(const std::string& sql,
                                                    Args... args) {
+        auto parent = has_tracer_ ? tracer_->captureContext()
+                                  : std::shared_ptr<obs::SpanContext>{};
         return exec_->submit(
-            [pool = pool_, attempts = default_attempts_, sql, args...]() {
+            [pool = pool_, attempts = default_attempts_,
+             parent = std::move(parent), sql, args...]() {
                 return instrument(
                     pool->metrics(), pool->tracer(), pool->metrics_enabled(),
-                    pool->tracer_enabled(), "halcyon.query", sql, [&] {
+                    pool->tracer_enabled(), "halcyon.query", sql,
+                    [&] {
                         return run_with_policy_on(
                             *pool, default_policy_for(*pool, attempts, sql),
                             [&](Connection& c) {
                                 return c.template queryAs<T>(sql, args...);
                             },
                             pool->metrics(), pool->metrics_enabled());
-                    });
+                    },
+                    parent.get());
             });
     }
 
@@ -542,14 +552,16 @@ private:
     template <class Fn>
     static auto instrument(obs::MetricsSink* m, obs::Tracer* t, bool hasM,
                            bool hasT, std::string_view spanName,
-                           const std::string& sql, Fn&& fn)
+                           const std::string& sql, Fn&& fn,
+                           const obs::SpanContext* parent = nullptr)
         -> std::invoke_result_t<Fn> {
         if (!hasM && !hasT) return fn();  // zero-overhead default
 
         const std::string_view op = detail::obs::op_label(sql);
         obs::ScopedSpan span =
             hasT ? obs::ScopedSpan(t->startSpan(
-                       spanName, {{"db.system", "db2"}, {"db.statement", sql}}))
+                       spanName,
+                       {{"db.system", "db2"}, {"db.statement", sql}}, parent))
                  : obs::ScopedSpan();
         detail::obs::Timer timer;
         auto r = fn();
