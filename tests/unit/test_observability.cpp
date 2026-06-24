@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include <cstdint>
+#include <future>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -474,6 +475,30 @@ TEST(Observability, QueryAsyncInheritsCallerContext) {
     const SpanRecord* q = findSpan(*t, "halcyon.query");
     ASSERT_NE(q, nullptr);
     EXPECT_EQ(q->parent, static_cast<const void*>(&marker));
+}
+
+TEST(Observability, ExecuteAsyncInheritsCallerContext) {
+    MockCliDriver driver;
+    driver.execRowCounts.push_back(1);
+    auto t = std::make_shared<RecordingTracer>();
+    PoolConfig cfg;
+    cfg.startMaintenanceThread = false;
+    cfg.observability.tracer = t;
+    auto db = Database::open(driver, "X", cfg).value();
+
+    int marker = 0;
+    auto parent = std::make_shared<RecordingContext>(&marker);
+    std::future<halcyon::Result<std::int64_t>> fut;
+    {
+        auto guard = db.useParentContext(parent);
+        fut = db.executeAsync("INSERT INTO t VALUES (?)", 1);
+    }  // guard drops here; the context was already captured at submit
+    auto r = fut.get();
+    ASSERT_TRUE(r.ok());
+
+    const SpanRecord* exec = findSpan(*t, "halcyon.execute");
+    ASSERT_NE(exec, nullptr);
+    EXPECT_EQ(exec->parent, static_cast<const void*>(&marker));
 }
 
 TEST(Observability, UseParentContextParentsSyncSpans) {
