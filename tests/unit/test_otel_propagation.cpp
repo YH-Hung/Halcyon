@@ -36,7 +36,9 @@ namespace {
 // exposes the collected span data.
 struct OtelHarness {
     std::shared_ptr<memexp::InMemorySpanData> data;
+    opentelemetry::nostd::shared_ptr<otrace::TracerProvider> previous;
     OtelHarness() {
+        previous = otrace::Provider::GetTracerProvider();  // save prior global provider first
         auto exporter = std::unique_ptr<memexp::InMemorySpanExporter>(
             new memexp::InMemorySpanExporter());
         data = exporter->GetData();
@@ -45,6 +47,9 @@ struct OtelHarness {
         std::shared_ptr<otrace::TracerProvider> provider(
             new sdktrace::TracerProvider(std::move(processor)));
         otrace::Provider::SetTracerProvider(provider);
+    }
+    ~OtelHarness() {
+        otrace::Provider::SetTracerProvider(previous);  // restore so the global isn't left holding a live SDK provider
     }
 };
 
@@ -132,6 +137,9 @@ TEST(OtelAdapter, AsyncInheritsActiveSpanAcrossThreads) {
     ASSERT_TRUE(r.ok());
     app->End();
 
+    // The query span ends inside instrument() as its frame unwinds (synchronous
+    // SimpleSpanProcessor export) before the executor resolves the future, so by
+    // the time fut.get() returns the span is already exported.
     auto spans = h.data->GetSpans();
     const auto* q = findExported(spans, "halcyon.query");
     ASSERT_NE(q, nullptr);
