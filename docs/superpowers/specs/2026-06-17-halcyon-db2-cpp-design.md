@@ -368,7 +368,8 @@ Halcyon spans propagate parent context so they form a correct trace:
 - **Nesting:** a started span is the active span for its lifetime, so nested
   Halcyon spans (`halcyon.transaction` → `halcyon.query`/`halcyon.execute` →
   `halcyon.acquire`) and any user spans created inside a `transaction(fn)`
-  callback parent correctly.
+  callback parent correctly. A `halcyon.reconnect` span emitted during acquisition
+  likewise nests under the enclosing `halcyon.acquire` span.
 - **Async:** `executeAsync`/`queryAsync` capture the caller's active context at
   submit time and re-parent the worker-thread span under it, so async spans are
   not orphaned roots.

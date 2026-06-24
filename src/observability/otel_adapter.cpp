@@ -66,10 +66,18 @@ public:
     void setStatusError(std::string_view sqlstate) override {
         span_->SetStatus(trace::StatusCode::kError, std::string(sqlstate));
     }
+    // Ends the OTel span but intentionally leaves token_ attached; the active
+    // context is detached only when this OtelSpan is destroyed. ScopedSpan
+    // destroys it immediately after end(), on the same thread, with no
+    // intervening startSpan, so detaches stay strictly LIFO. Do not introduce a
+    // path that starts another span on this thread between an early end() and
+    // this object's destruction.
     void end() override { span_->End(); }
 
 private:
     otel::nostd::shared_ptr<trace::Span> span_;
+    // Declared after span_ so the context Token is destroyed (detached) before
+    // the span handle is released.
     otel::nostd::unique_ptr<context::Token> token_;
 };
 
