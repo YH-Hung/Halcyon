@@ -39,6 +39,18 @@ target_include_directories(halcyon_unit_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR
 include(GoogleTest)
 gtest_discover_tests(halcyon_unit_tests)
 
+# OTel-gated propagation tests: real SpanId parent/child links via the in-memory
+# exporter. Built only when the opentelemetry-cpp adapter is enabled.
+if(HALCYON_OTEL_ADAPTER_ENABLED)
+    add_executable(halcyon_otel_tests unit/test_otel_propagation.cpp)
+    target_link_libraries(halcyon_otel_tests
+        PRIVATE halcyon::halcyon GTest::gtest_main Threads::Threads
+                opentelemetry-cpp::in_memory_span_exporter)
+    target_include_directories(halcyon_otel_tests
+        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/unit)
+    gtest_discover_tests(halcyon_otel_tests)
+endif()
+
 if(HALCYON_BUILD_INTEGRATION_TESTS)
     add_subdirectory(integration)
 endif()
