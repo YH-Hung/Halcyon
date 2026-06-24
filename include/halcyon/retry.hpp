@@ -25,7 +25,8 @@ struct BackoffPolicy {
         long long mult = 1;
         for (int i = 1; i < attempt && mult < (1LL << 30); ++i) mult <<= 1;
         auto scaled = baseDelay * mult;
-        return scaled > maxDelay ? maxDelay : scaled;
+        if (scaled > maxDelay) return maxDelay;
+        return std::chrono::duration_cast<std::chrono::milliseconds>(scaled);
     }
 };
 
