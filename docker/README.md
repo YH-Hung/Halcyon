@@ -19,10 +19,11 @@ caveat at the end).
 ## Docker (default)
 
 ```bash
-# 1. Start Db2 and wait until the container reports healthy. The first boot
-#    creates the SAMPLE database (~2 min native; longer under amd64 emulation).
-docker compose -f docker/docker-compose.yml up -d
-docker compose -f docker/docker-compose.yml ps   # wait for STATUS = healthy
+# 1. Start Db2 and wait until first-boot setup and host-side connectivity are
+#    stable. The first boot creates SAMPLE (~2 min native; longer under
+#    amd64 emulation).
+docker compose -f docker/docker-compose.yml up -d --wait --wait-timeout 600
+docker/wait-for-db2-ready.sh
 
 # 2. Point the tests at the container and run them.
 export HALCYON_TEST_DSN="DATABASE=SAMPLE;HOSTNAME=localhost;PORT=50000;UID=db2inst1;PWD=halcyon;"

@@ -165,9 +165,15 @@ jobs:
         run: cmake --build build -j
 
       # First boot creates SAMPLE (~2 min). --wait blocks until healthy.
+      # The Db2 image can still restart once after that while finishing setup,
+      # so wait for the entrypoint completion marker plus stable host probes.
       - name: Start Db2
         run: |
           docker compose -f docker/docker-compose.yml up -d --wait --wait-timeout 600
+          docker/wait-for-db2-ready.sh docker/docker-compose.yml db2 \
+            env HALCYON_TEST_DSN="DATABASE=SAMPLE;HOSTNAME=localhost;PORT=50000;UID=db2inst1;PWD=halcyon;" \
+            build/tests/integration/halcyon_integration_tests \
+              --gtest_filter=Db2FacadeIntegration.QueryExecuteAndTransaction
 
       - name: Integration tests
         env:
