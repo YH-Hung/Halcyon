@@ -48,8 +48,8 @@ TEST(FakeDriverTest, FailExecuteEveryTripsAtRate) {
     d.failExecuteEvery = 2;  // every 2nd execute fails, retriable
     auto c = d.connect({"dsn"}).value();
     auto s = d.prepare(c, "SELECT 1 FROM SYSIBM.SYSDUMMY1").value();
-    EXPECT_TRUE(d.execute(s).ok());        // call 1
-    auto r2 = d.execute(s);                // call 2 -> fail
+    EXPECT_TRUE(d.execute(s).ok());  // call 1
+    auto r2 = d.execute(s);          // call 2 -> fail
     ASSERT_FALSE(r2.ok());
     EXPECT_TRUE(r2.error().retriable);
 }
@@ -66,12 +66,12 @@ TEST(FakeDriverTest, StatementOnDeadConnectionErrors) {
 
 #include "workload_runner.hpp"
 
+using halcyon::stress::run_workload;
 using halcyon::stress::RunConfig;
 using halcyon::stress::RunReport;
 using halcyon::stress::Stop;
 using halcyon::stress::WorkerCtx;
 using halcyon::stress::Workload;
-using halcyon::stress::run_workload;
 
 TEST(WorkloadRunnerTest, RunsExactlyTotalIterationsAcrossThreads) {
     std::atomic<long> ops{0};
@@ -123,7 +123,7 @@ TEST(StressScenario, PoolContentionStaysConsistent) {
 
     Workload w = make_pool_contention(db.value());
     RunConfig cfg;
-    cfg.threads = 32;                 // threads >> pool max
+    cfg.threads = 32;  // threads >> pool max
     cfg.stop.total_iters = 20000;
     RunReport r = run_workload(w, cfg);
 
@@ -142,12 +142,12 @@ TEST(StressScenario, ExecutorSaturationResolvesEveryFuture) {
 
     Workload w = make_executor_saturation(db.value());
     RunConfig cfg;
-    cfg.threads = 16;                 // far more launchers than executor threads
+    cfg.threads = 16;  // far more launchers than executor threads
     cfg.stop.total_iters = 8000;
     RunReport r = run_workload(w, cfg);
 
     EXPECT_FALSE(r.failed) << r.first_error;
-    EXPECT_EQ(r.ops, 8000u);          // every op (a launched+awaited future) done
+    EXPECT_EQ(r.ops, 8000u);  // every op (a launched+awaited future) done
     EXPECT_EQ(db.value().pool().active_count(), 0u);
 }
 
@@ -220,8 +220,8 @@ using halcyon::stress::make_reconnect_faults;
 
 TEST(StressScenario, ReconnectAndRetryRecoverUnderFaults) {
     auto fake = std::make_shared<ConcurrentFakeDriver>();
-    fake->failExecuteEvery = 7;       // retriable statement errors
-    fake->killConnectionEvery = 11;   // forces validate-on-acquire reconnects
+    fake->failExecuteEvery = 7;      // retriable statement errors
+    fake->killConnectionEvery = 11;  // forces validate-on-acquire reconnects
     auto db = Database::open(fake, "dsn", config_for(ScenarioId::Reconnect, 6));
     ASSERT_TRUE(db.ok()) << db.error().message;
     const long connects_after_warmup = fake->connectCalls.load();
@@ -239,14 +239,14 @@ TEST(StressScenario, ReconnectAndRetryRecoverUnderFaults) {
     cfg.stop.total_iters = 30000;
     RunReport r = run_workload(w, cfg);
 
-    EXPECT_FALSE(r.failed) << r.first_error;            // no wrong scalar / non-retriable
+    EXPECT_FALSE(r.failed) << r.first_error;  // no wrong scalar / non-retriable
     EXPECT_GT(fake->connectCalls.load(),
-              connects_after_warmup);                   // reconnects actually fired
+              connects_after_warmup);  // reconnects actually fired
     EXPECT_GT(fake->executeCalls.load(),
-              static_cast<long>(r.ops));                // retries actually fired
+              static_cast<long>(r.ops));  // retries actually fired
     EXPECT_GT(recovered.load(),
-              static_cast<long>(r.ops) * 9 / 10);       // vast majority recovered
-    EXPECT_EQ(db.value().pool().active_count(), 0u);    // no leaked leases
+              static_cast<long>(r.ops) * 9 / 10);     // vast majority recovered
+    EXPECT_EQ(db.value().pool().active_count(), 0u);  // no leaked leases
 }
 
 using halcyon::stress::make_txn_churn;
@@ -263,11 +263,11 @@ TEST(StressScenario, TransactionChurnCommitsAndRollbacksBalance) {
     RunReport r = run_workload(w, cfg);
 
     EXPECT_FALSE(r.failed) << r.first_error;
-    const long txns = fake->autoCommitOff.load();         // each begin() flips off
+    const long txns = fake->autoCommitOff.load();  // each begin() flips off
     EXPECT_EQ(txns, 16000);
     EXPECT_EQ(fake->commitCalls.load() + fake->rollbackCalls.load(), txns);
-    EXPECT_EQ(fake->autoCommitOn.load(), txns);           // each tx restores it
-    EXPECT_EQ(db.value().pool().active_count(), 0u);      // no tx leaks a connection
+    EXPECT_EQ(fake->autoCommitOn.load(), txns);       // each tx restores it
+    EXPECT_EQ(db.value().pool().active_count(), 0u);  // no tx leaks a connection
 }
 
 #include <future>
@@ -322,18 +322,18 @@ TEST(StressScenario, ReaperRacesAcquireReleaseSafely) {
     RunReport r = run_workload(w, cfg);
 
     EXPECT_FALSE(r.failed) << r.first_error;
-    EXPECT_LE(fake->peakInFlight.load(), 6);             // reaper never reaps a lease
+    EXPECT_LE(fake->peakInFlight.load(), 6);  // reaper never reaps a lease
     EXPECT_EQ(db.value().pool().active_count(), 0u);
     EXPECT_GE(db.value().pool().total_count(),
-              db.value().pool().idle_count());           // accounting consistent
+              db.value().pool().idle_count());  // accounting consistent
 
     // Reaper/gauge invariants over the WHOLE run (§6.6). The maintenance thread is
     // still emitting, so read the captured extrema under the sink's lock.
     std::lock_guard<std::mutex> lk(gauge->mu);
-    EXPECT_GT(gauge->samples, 0);          // the gauge was actually exercised
-    EXPECT_GE(gauge->min_active, 0.0);     // active count is never negative
-    EXPECT_LE(gauge->max_active, 6.0);     // reaper/acquire never exceed pool max
-    EXPECT_GE(gauge->min_idle, 0.0);       // idle count is never negative
+    EXPECT_GT(gauge->samples, 0);       // the gauge was actually exercised
+    EXPECT_GE(gauge->min_active, 0.0);  // active count is never negative
+    EXPECT_LE(gauge->max_active, 6.0);  // reaper/acquire never exceed pool max
+    EXPECT_GE(gauge->min_idle, 0.0);    // idle count is never negative
     // NOTE: total >= min is deliberately NOT asserted at a single snapshot. With
     // maxLifetime=5ms the reaper legitimately evicts a connection even at/below min
     // and refills afterwards (see ConnectionPool::maintain), so total transiently

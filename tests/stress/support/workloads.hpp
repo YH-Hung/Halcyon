@@ -6,10 +6,10 @@
 #include <cstdint>
 #include <string>
 
+#include "concurrent_fake_driver.hpp"
 #include "halcyon/database.hpp"
 #include "halcyon/pool.hpp"
 #include "halcyon/types.hpp"
-#include "concurrent_fake_driver.hpp"
 #include "workload_runner.hpp"
 
 namespace halcyon::stress {
@@ -26,7 +26,12 @@ HALCYON_REFLECT(halcyon::stress::One, v);
 
 namespace halcyon::stress {
 
-enum class ScenarioId { Pool, Executor, Cache, Reconnect, Txn, Lifecycle };
+enum class ScenarioId { Pool,
+                        Executor,
+                        Cache,
+                        Reconnect,
+                        Txn,
+                        Lifecycle };
 
 // The tuned PoolConfig for each scenario. pool_max is the only sweepable knob the
 // perf harness varies; everything else is scenario-intrinsic.
@@ -77,7 +82,7 @@ inline std::string select_n(std::int64_t n) {
 // retry), release via RAII scope. A pool-timeout error is expected under
 // contention and is NOT a failure.
 inline Workload make_pool_contention(Database& db) {
-    return Workload{"pool", [&db](WorkerCtx& ctx) {
+    auto body = [&db](WorkerCtx& ctx) {
         auto pc = db.pool().acquire();
         if (!pc.ok()) {
             if (pc.error().code != ErrorCode::Pool)
@@ -93,7 +98,8 @@ inline Workload make_pool_contention(Database& db) {
         }
         if (r.value().size() != 1 || r.value()[0].v != 7)
             ctx.fail("wrong scalar from pooled query");
-    }};
+    };
+    return Workload{"pool", body};
 }
 
 // --- Scenario 2: async executor saturation (product path: Database async) ---
@@ -101,7 +107,7 @@ inline Workload make_pool_contention(Database& db) {
 // blocks on its future. Many runner threads launching at once saturate the fixed
 // executor; every future must resolve exactly once with the right scalar.
 inline Workload make_executor_saturation(Database& db) {
-    return Workload{"executor", [&db](WorkerCtx& ctx) {
+    auto body = [&db](WorkerCtx& ctx) {
         auto fut = db.queryAsync<One>(select_n(7));
         auto r = fut.get();
         if (!r.ok()) {
@@ -110,7 +116,8 @@ inline Workload make_executor_saturation(Database& db) {
         }
         if (r.value().size() != 1 || r.value()[0].v != 7)
             ctx.fail("wrong scalar from async query");
-    }};
+    };
+    return Workload{"executor", body};
 }
 
 // --- Scenario 3: statement-cache correctness under reuse ---
@@ -118,7 +125,7 @@ inline Workload make_executor_saturation(Database& db) {
 // the busy->overflow path (same SQL concurrently), and eviction all occur. Each op
 // asserts the scalar matches the SQL it sent (proves no cross-thread row mixup).
 inline Workload make_cache_churn(Database& db) {
-    return Workload{"cache", [&db](WorkerCtx& ctx) {
+    auto body = [&db](WorkerCtx& ctx) {
         std::int64_t n = 1 + static_cast<std::int64_t>(ctx.rng() % 3);  // 1..3
         auto r = db.queryAs<One>(select_n(n));
         if (!r.ok()) {
@@ -127,7 +134,8 @@ inline Workload make_cache_churn(Database& db) {
         }
         if (r.value().size() != 1 || r.value()[0].v != n)
             ctx.fail("wrong scalar from cached query");
-    }};
+    };
+    return Workload{"cache", body};
 }
 
 // --- Scenario 4: reconnect + transient-fault injection under load ---
@@ -142,7 +150,7 @@ inline Workload make_cache_churn(Database& db) {
 // back with the right value, so the caller can prove the bulk genuinely recovered.
 inline Workload make_reconnect_faults(Database& db,
                                       std::atomic<long>* recovered = nullptr) {
-    return Workload{"reconnect", [&db, recovered](WorkerCtx& ctx) {
+    auto body = [&db, recovered](WorkerCtx& ctx) {
         auto r = db.queryAs<One>(select_n(7));
         if (!r.ok()) {
             // Exhausting a bounded retry budget surfaces a retriable error: allowed.
@@ -158,14 +166,15 @@ inline Workload make_reconnect_faults(Database& db,
             return;
         }
         if (recovered) recovered->fetch_add(1, std::memory_order_relaxed);
-    }};
+    };
+    return Workload{"reconnect", body};
 }
 
 // --- Scenario 5: transaction churn (facade transaction(); commit + rollback) ---
 // Half the ops commit (lambda returns ok) and half roll back (lambda returns an
 // error Result), exercising ScopedTransaction's commit/rollback + lease-return.
 inline Workload make_txn_churn(Database& db) {
-    return Workload{"txn", [&db](WorkerCtx& ctx) {
+    auto body = [&db](WorkerCtx& ctx) {
         const bool do_commit = (ctx.rng() & 1u) == 0u;
         auto r = db.transaction(
             [&](Transaction& tx) -> Result<std::int64_t> {
@@ -178,7 +187,7 @@ inline Workload make_txn_churn(Database& db) {
                     return e;
                 }
                 if (do_commit) return std::int64_t{1};
-                Error e;          // force a rollback path
+                Error e;  // force a rollback path
                 e.code = ErrorCode::Unknown;
                 e.message = "intentional rollback";
                 return e;
@@ -187,7 +196,8 @@ inline Workload make_txn_churn(Database& db) {
         // A Mapping error means the in-tx read was wrong -> real failure.
         if (!r.ok() && r.error().code == ErrorCode::Mapping)
             ctx.fail("in-transaction read returned wrong scalar");
-    }};
+    };
+    return Workload{"txn", body};
 }
 
 }  // namespace halcyon::stress

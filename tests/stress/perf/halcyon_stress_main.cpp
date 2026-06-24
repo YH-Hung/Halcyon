@@ -7,11 +7,11 @@
 #include <string>
 #include <vector>
 
+#include "concurrent_fake_driver.hpp"
 #include "halcyon/database.hpp"
 #include "halcyon/detail/cli/db2_cli_driver.hpp"
-#include "concurrent_fake_driver.hpp"
-#include "workloads.hpp"
 #include "workload_runner.hpp"
+#include "workloads.hpp"
 
 using namespace halcyon;
 using namespace halcyon::stress;
@@ -53,7 +53,10 @@ std::vector<std::size_t> parse_threads(const std::string& csv) {
 
 bool arg_val(const std::string& a, const char* key, std::string& out) {
     const std::string prefix = std::string(key) + "=";
-    if (a.rfind(prefix, 0) == 0) { out = a.substr(prefix.size()); return true; }
+    if (a.rfind(prefix, 0) == 0) {
+        out = a.substr(prefix.size());
+        return true;
+    }
     return false;
 }
 
@@ -74,7 +77,10 @@ Options parse(int argc, char** argv) {
         else if (arg_val(a, "--latency-mult", v)) o.latency_mult = std::stod(v);
         else if (arg_val(a, "--starvation-max", v)) o.starvation_max = std::stod(v);
         else if (a == "--strict") o.strict = true;
-        else { std::cerr << "unknown arg: " << a << "\n"; std::exit(2); }
+        else {
+            std::cerr << "unknown arg: " << a << "\n";
+            std::exit(2);
+        }
     }
     return o;
 }
@@ -108,21 +114,33 @@ struct PerfCountersSink final : obs::MetricsSink {
     }
 };
 
-struct ScenarioSpec { ScenarioId id; const char* name; };
+struct ScenarioSpec {
+    ScenarioId id;
+    const char* name;
+};
 const std::vector<ScenarioSpec> kScenarios = {
-    {ScenarioId::Pool, "pool"},   {ScenarioId::Executor, "executor"},
-    {ScenarioId::Cache, "cache"}, {ScenarioId::Reconnect, "reconnect"},
-    {ScenarioId::Txn, "txn"},     {ScenarioId::Lifecycle, "lifecycle"},
+    {ScenarioId::Pool, "pool"},
+    {ScenarioId::Executor, "executor"},
+    {ScenarioId::Cache, "cache"},
+    {ScenarioId::Reconnect, "reconnect"},
+    {ScenarioId::Txn, "txn"},
+    {ScenarioId::Lifecycle, "lifecycle"},
 };
 
 Workload make_workload(ScenarioId id, Database& db) {
     switch (id) {
-        case ScenarioId::Pool: return make_pool_contention(db);
-        case ScenarioId::Executor: return make_executor_saturation(db);
-        case ScenarioId::Cache: return make_cache_churn(db);
-        case ScenarioId::Reconnect: return make_reconnect_faults(db);
-        case ScenarioId::Txn: return make_txn_churn(db);
-        case ScenarioId::Lifecycle: return make_pool_contention(db);
+        case ScenarioId::Pool:
+            return make_pool_contention(db);
+        case ScenarioId::Executor:
+            return make_executor_saturation(db);
+        case ScenarioId::Cache:
+            return make_cache_churn(db);
+        case ScenarioId::Reconnect:
+            return make_reconnect_faults(db);
+        case ScenarioId::Txn:
+            return make_txn_churn(db);
+        case ScenarioId::Lifecycle:
+            return make_pool_contention(db);
     }
     return make_pool_contention(db);
 }

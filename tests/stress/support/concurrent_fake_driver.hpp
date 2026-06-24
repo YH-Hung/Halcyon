@@ -115,7 +115,7 @@ public:
         it->second.position = -1;
         const int ke = killConnectionEvery.load();
         if (ke > 0 && n % ke == 0) {
-            live_.erase(it->second.conn);   // next isAlive -> false
+            live_.erase(it->second.conn);  // next isAlive -> false
             dead_.insert(it->second.conn);
         }
         return Result<std::int64_t>(is_select(it->second.sql) ? 0 : 1);
@@ -167,7 +167,8 @@ public:
 
     // --- Transaction control ---
     Result<void> setAutoCommit(ConnectionHandle, bool enabled) override {
-        if (enabled) ++autoCommitOn; else ++autoCommitOff;
+        if (enabled) ++autoCommitOn;
+        else ++autoCommitOff;
         return Result<void>();
     }
     Result<void> commit(ConnectionHandle) override {

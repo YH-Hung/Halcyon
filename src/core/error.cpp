@@ -37,7 +37,6 @@ void throw_error(const Error& err) {
         case ErrorCode::Constraint:
             throw ConstraintException(err);
         case ErrorCode::Deadlock:
-            throw TransientException(err);
         case ErrorCode::Transient:
             throw TransientException(err);
         case ErrorCode::Syntax:
@@ -45,7 +44,6 @@ void throw_error(const Error& err) {
         case ErrorCode::Mapping:
             throw MappingException(err);
         case ErrorCode::Pool:
-            throw Exception(err);
         case ErrorCode::Ok:
         case ErrorCode::Unknown:
             throw Exception(err);

@@ -50,8 +50,8 @@ jobs:
 
       - name: clang-tidy
         run: |
-          mapfile -t files < <(find src include -name '*.cpp' -type f)
-          clang-tidy -p build "${files[@]}"
+          python3 -c 'import json, pathlib; root = pathlib.Path.cwd(); commands = json.loads(pathlib.Path("build/compile_commands.json").read_text()); [print(path) for path in (pathlib.Path(e["file"]).resolve() for e in commands) if root in path.parents and path.suffix == ".cpp" and "src" in path.parts]' |
+            xargs clang-tidy -p build
 
       - name: Fail if clang-format failed
         if: steps.clang_format.outcome == 'failure'

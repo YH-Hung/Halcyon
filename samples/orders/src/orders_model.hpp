@@ -12,18 +12,18 @@
 // --- Reflected row types ---------------------------------------------------
 
 struct Customer {
-    int                        customer_id = 0;
-    std::string                name;
-    std::optional<std::string> email;        // maps the nullable EMAIL column
-    halcyon::Date              created_at;
+    int customer_id = 0;
+    std::string name;
+    std::optional<std::string> email;  // maps the nullable EMAIL column
+    halcyon::Date created_at;
 };
 HALCYON_REFLECT(Customer, customer_id, name, email, created_at);
 
 struct Order {
-    std::string        order_no;
-    int                customer_id = 0;
-    std::string        status;
-    halcyon::Decimal   total_amount;
+    std::string order_no;
+    int customer_id = 0;
+    std::string status;
+    halcyon::Decimal total_amount;
     halcyon::Timestamp order_ts;
 };
 HALCYON_REFLECT(Order, order_no, customer_id, status, total_amount, order_ts);
@@ -44,7 +44,7 @@ inline constexpr const char* kSelectOrdersForCustomer =
     "FROM orders WHERE customer_id = :cid ORDER BY order_no";  // named param
 inline constexpr const char* kInsertOrder =
     "INSERT INTO orders(order_no, customer_id, status, total_amount, order_ts) "
-    "VALUES (?, ?, ?, ?, ?)";                                  // positional
+    "VALUES (?, ?, ?, ?, ?)";  // positional
 inline constexpr const char* kUpdateOrderStatus =
     "UPDATE orders SET status = ? WHERE order_no = ?";
 inline constexpr const char* kSelectOrderByNo =

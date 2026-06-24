@@ -347,7 +347,7 @@ public:
     Result<void> setAutoCommit(ConnectionHandle conn, bool enabled) override {
         SQLHDBC dbc = conn_handle(conn);
         if (dbc == SQL_NULL_HANDLE) return unknown_conn();
-        SQLPOINTER v = reinterpret_cast<SQLPOINTER>(static_cast<SQLLEN>(
+        SQLPOINTER v = reinterpret_cast<SQLPOINTER>(static_cast<SQLLEN>(  // NOLINT(performance-no-int-to-ptr)
             enabled ? SQL_AUTOCOMMIT_ON : SQL_AUTOCOMMIT_OFF));
         SQLRETURN rc = SQLSetConnectAttr(dbc, SQL_ATTR_AUTOCOMMIT, v,
                                          SQL_IS_INTEGER);

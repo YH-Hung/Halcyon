@@ -2,6 +2,7 @@
 Language: Cpp
 BasedOnStyle: LLVM
 
+# This is the repository-authoritative style; CI runs clang-format in check mode.
 # Halcyon uses a compact C++17 style with 4-space indentation and attached
 # braces. Keep the formatter from importing LLVM's 2-space defaults.
 Standard: c++17
@@ -25,6 +26,7 @@ AllowShortFunctionsOnASingleLine: All
 AllowShortIfStatementsOnASingleLine: AllIfsAndElse
 AllowShortLoopsOnASingleLine: true
 AllowShortLambdasOnASingleLine: All
+AllowShortEnumsOnASingleLine: true
 
 # Avoid noisy wrapping churn in SQL strings, comments, and fluent-style tests.
 ColumnLimit: 0

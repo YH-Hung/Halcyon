@@ -1,10 +1,13 @@
 #include "halcyon/detail/cli/sqlstate.hpp"
 
+#include <algorithm>
+
 namespace halcyon::detail::cli {
 
 namespace {
 bool starts_with(std::string_view s, std::string_view prefix) noexcept {
-    return s.size() >= prefix.size() && s.substr(0, prefix.size()) == prefix;
+    return s.size() >= prefix.size() &&
+           std::equal(prefix.begin(), prefix.end(), s.begin());
 }
 }  // namespace
 
