@@ -340,3 +340,14 @@ TEST(Observability, DefaultConfigResolvesToNoopSinks) {
     EXPECT_FALSE(db.pool().tracer_enabled());
     EXPECT_TRUE(db.execute("UPDATE t SET a=?", 1).ok());  // still works
 }
+
+TEST(Observability, NoopTracerContextDefaultsAreInert) {
+    obs::NoopTracer t;
+    EXPECT_EQ(t.captureContext(), nullptr);
+    EXPECT_EQ(t.attachContext(nullptr), nullptr);
+    auto span = t.startSpan("x", {}, nullptr);  // 3-arg overload exists
+    ASSERT_NE(span, nullptr);                    // returns a NoopSpan, not null
+    span->end();
+    obs::ScopedContext empty;                    // default-constructed is falsy
+    EXPECT_FALSE(static_cast<bool>(empty));
+}

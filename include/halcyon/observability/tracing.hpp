@@ -19,10 +19,49 @@ struct Span {
     virtual void end() = 0;
 };
 
+// Opaque, type-erased snapshot of a tracer backend's parent context (e.g. an
+// OpenTelemetry context::Context carrying the active span or a remote parent).
+// Core treats it as opaque; adapters subclass it. Obtained from
+// Tracer::captureContext() or an adapter helper (make_otel_active_context /
+// extract_otel_context) and handed back to startSpan()/attachContext().
+struct SpanContext {
+    virtual ~SpanContext() = default;
+};
+
+// Opaque RAII token: while alive, a SpanContext is the active context on the
+// current thread; destruction restores the previously-active context. Adapters
+// subclass it; core only holds and drops it via ScopedContext.
+struct ContextToken {
+    virtual ~ContextToken() = default;
+};
+
 struct Tracer {
     virtual ~Tracer() = default;
     virtual std::unique_ptr<Span> startSpan(std::string_view name,
                                             const SpanAttrs& attrs) = 0;
+
+    // Snapshot the active context on the calling thread, for handing to another
+    // thread (e.g. an async worker). Default: nothing to propagate.
+    virtual std::shared_ptr<SpanContext> captureContext() { return nullptr; }
+
+    // Start a span explicitly parented to `parent`. A null parent means "use the
+    // active context", identical to the two-argument overload. Default: ignore
+    // the parent and delegate, so existing tracers need no changes.
+    virtual std::unique_ptr<Span> startSpan(std::string_view name,
+                                            const SpanAttrs& attrs,
+                                            const SpanContext* parent) {
+        (void)parent;
+        return startSpan(name, attrs);
+    }
+
+    // Make `ctx` the active context on the current thread until the returned
+    // token is dropped. Default: no-op (null token). A null ctx yields a null
+    // token.
+    virtual std::unique_ptr<ContextToken> attachContext(
+        const std::shared_ptr<SpanContext>& ctx) {
+        (void)ctx;
+        return nullptr;
+    }
 };
 
 struct NoopSpan final : Span {
@@ -32,6 +71,7 @@ struct NoopSpan final : Span {
 };
 
 struct NoopTracer final : Tracer {
+    using Tracer::startSpan;  // bring all overloads into scope
     std::unique_ptr<Span> startSpan(std::string_view,
                                     const SpanAttrs&) override {
         return std::make_unique<NoopSpan>();
@@ -68,6 +108,24 @@ public:
 
 private:
     std::unique_ptr<Span> span_;
+};
+
+// RAII wrapper that drops a ContextToken (restoring the previously-active
+// context) on scope exit and tolerates an empty (null) token, mirroring
+// ScopedSpan so call sites cost nothing when tracing is disabled.
+class ScopedContext {
+public:
+    ScopedContext() = default;
+    explicit ScopedContext(std::unique_ptr<ContextToken> tok)
+        : tok_(std::move(tok)) {}
+    ScopedContext(ScopedContext&&) = default;
+    ScopedContext& operator=(ScopedContext&&) = default;
+    ScopedContext(const ScopedContext&) = delete;
+    ScopedContext& operator=(const ScopedContext&) = delete;
+    explicit operator bool() const noexcept { return static_cast<bool>(tok_); }
+
+private:
+    std::unique_ptr<ContextToken> tok_;
 };
 
 }  // namespace halcyon::obs
