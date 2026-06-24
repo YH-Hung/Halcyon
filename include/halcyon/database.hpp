@@ -474,6 +474,18 @@ public:
             });
     }
 
+    // Parent all Halcyon spans created on the current thread under `ctx` until
+    // the returned guard is destroyed — synchronous calls and any async work
+    // submitted while it is held. `ctx` comes from the OTel adapter
+    // (obs::make_otel_active_context / obs::extract_otel_context). No-op (empty
+    // guard) when no tracer is configured.
+    [[nodiscard]] obs::ScopedContext useParentContext(
+        std::shared_ptr<obs::SpanContext> ctx) {
+        return obs::ScopedContext(
+            has_tracer_ ? tracer_->attachContext(std::move(ctx))
+                        : std::unique_ptr<obs::ContextToken>{});
+    }
+
 private:
     Database(std::shared_ptr<detail::cli::ICliDriver> owned_driver,
              std::shared_ptr<ConnectionPool> pool, std::shared_ptr<Executor> exec)

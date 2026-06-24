@@ -450,3 +450,29 @@ TEST(Observability, TransactionSpanParentsAcquire) {
     ASSERT_NE(txn, nullptr);
     EXPECT_NE(findChild(*t, "halcyon.acquire", txn), nullptr);
 }
+
+TEST(Observability, UseParentContextParentsSyncSpans) {
+    MockCliDriver driver;
+    driver.execRowCounts.push_back(1);
+    auto t = std::make_shared<RecordingTracer>();
+    PoolConfig cfg;
+    cfg.startMaintenanceThread = false;
+    cfg.observability.tracer = t;
+    auto db = Database::open(driver, "X", cfg).value();
+
+    int marker = 0;
+    auto parent = std::make_shared<RecordingContext>(&marker);
+    {
+        auto guard = db.useParentContext(parent);
+        ASSERT_TRUE(static_cast<bool>(guard));  // tracer present -> real guard
+        ASSERT_TRUE(db.execute("INSERT INTO t VALUES (?)", 1).ok());
+    }
+
+    const SpanRecord* exec = findSpan(*t, "halcyon.execute");
+    ASSERT_NE(exec, nullptr);
+    EXPECT_EQ(exec->parent, static_cast<const void*>(&marker));
+
+    // Guard dropped -> the context is no longer active on this thread.
+    auto after = t->captureContext();
+    EXPECT_EQ(static_cast<RecordingContext*>(after.get())->id, nullptr);
+}
