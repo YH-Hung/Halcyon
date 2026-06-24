@@ -92,32 +92,88 @@ struct SpanRecord {
     std::string name;
     std::map<std::string, std::string> attrs;
     bool errored = false;
+    const void* parent = nullptr;  // identity of the context this span started under
 };
+
+// Identity-only fake parent context for the recording tracer.
+struct RecordingContext : obs::SpanContext {
+    const void* id;
+    explicit RecordingContext(const void* i) : id(i) {}
+};
+
+// Active-context stack for the current thread, modeling OTel RuntimeContext.
+// Entries are span identities (a SpanRecord*) or an attached context id.
+thread_local std::vector<const void*> g_active_ctx;
 
 class RecordingSpan : public obs::Span {
 public:
-    explicit RecordingSpan(SpanRecord* r) : r_(r) {}
+    explicit RecordingSpan(SpanRecord* r) : r_(r) {
+        g_active_ctx.push_back(r_);  // self-activate (mirrors OtelSpan's scope)
+    }
     void setAttribute(std::string_view k, std::string_view v) override {
         r_->attrs[std::string(k)] = std::string(v);
     }
     void setStatusError(std::string_view) override { r_->errored = true; }
-    void end() override {}
+    void end() override {
+        if (ended_) return;
+        ended_ = true;
+        if (!g_active_ctx.empty() && g_active_ctx.back() == r_)
+            g_active_ctx.pop_back();  // LIFO: ends on the same thread, reverse order
+    }
+    ~RecordingSpan() override { end(); }
 
 private:
     SpanRecord* r_;
+    bool ended_ = false;
+};
+
+class RecordingContextToken : public obs::ContextToken {
+public:
+    explicit RecordingContextToken(const void* id) : id_(id) {
+        g_active_ctx.push_back(id_);
+    }
+    ~RecordingContextToken() override {
+        if (!g_active_ctx.empty() && g_active_ctx.back() == id_)
+            g_active_ctx.pop_back();
+    }
+
+private:
+    const void* id_;
 };
 
 class RecordingTracer : public obs::Tracer {
 public:
     std::unique_ptr<obs::Span> startSpan(std::string_view name,
                                          const obs::SpanAttrs& attrs) override {
-        std::lock_guard<std::mutex> lk(mu);
+        return startSpan(name, attrs, nullptr);
+    }
+    std::unique_ptr<obs::Span> startSpan(std::string_view name,
+                                         const obs::SpanAttrs& attrs,
+                                         const obs::SpanContext* parent) override {
         auto rec = std::make_shared<SpanRecord>();
         rec->name = std::string(name);
         for (const auto& [k, v] : attrs)
             rec->attrs[std::string(k)] = std::string(v);
-        spans.push_back(rec);
+        // Parent resolved BEFORE the span self-activates: explicit parent wins,
+        // else the current active-context top (or none).
+        rec->parent = parent
+                          ? static_cast<const RecordingContext*>(parent)->id
+                          : (g_active_ctx.empty() ? nullptr : g_active_ctx.back());
+        {
+            std::lock_guard<std::mutex> lk(mu);
+            spans.push_back(rec);
+        }
         return std::make_unique<RecordingSpan>(rec.get());
+    }
+    std::shared_ptr<obs::SpanContext> captureContext() override {
+        return std::make_shared<RecordingContext>(
+            g_active_ctx.empty() ? nullptr : g_active_ctx.back());
+    }
+    std::unique_ptr<obs::ContextToken> attachContext(
+        const std::shared_ptr<obs::SpanContext>& ctx) override {
+        const void* id =
+            ctx ? static_cast<const RecordingContext*>(ctx.get())->id : nullptr;
+        return std::make_unique<RecordingContextToken>(id);
     }
     std::vector<std::shared_ptr<SpanRecord>> spans;
     mutable std::mutex mu;
@@ -127,6 +183,14 @@ const SpanRecord* findSpan(const RecordingTracer& t, const std::string& name) {
     std::lock_guard<std::mutex> lk(t.mu);
     for (const auto& s : t.spans)
         if (s->name == name) return s.get();
+    return nullptr;
+}
+
+const SpanRecord* findChild(const RecordingTracer& t, const std::string& name,
+                            const void* parent) {
+    std::lock_guard<std::mutex> lk(t.mu);
+    for (const auto& s : t.spans)
+        if (s->name == name && s->parent == parent) return s.get();
     return nullptr;
 }
 
@@ -350,4 +414,39 @@ TEST(Observability, NoopTracerContextDefaultsAreInert) {
     span->end();
     obs::ScopedContext empty;                    // default-constructed is falsy
     EXPECT_FALSE(static_cast<bool>(empty));
+}
+
+TEST(Observability, QuerySpanParentsAcquire) {
+    MockCliDriver driver;
+    driver.execRowCounts.push_back(0);
+    auto t = std::make_shared<RecordingTracer>();
+    PoolConfig cfg;
+    cfg.startMaintenanceThread = false;
+    cfg.observability.tracer = t;
+    auto db = Database::open(driver, "X", cfg).value();
+
+    ASSERT_TRUE(db.execute("UPDATE t SET a=?", 1).ok());
+
+    const SpanRecord* exec = findSpan(*t, "halcyon.execute");
+    ASSERT_NE(exec, nullptr);
+    EXPECT_NE(findChild(*t, "halcyon.acquire", exec), nullptr);
+}
+
+TEST(Observability, TransactionSpanParentsAcquire) {
+    MockCliDriver driver;
+    driver.execRowCounts.push_back(1);
+    auto t = std::make_shared<RecordingTracer>();
+    PoolConfig cfg;
+    cfg.startMaintenanceThread = false;
+    cfg.observability.tracer = t;
+    auto db = Database::open(driver, "X", cfg).value();
+
+    auto r = db.transaction([](halcyon::Transaction& tx) {
+        return tx.execute("INSERT INTO t VALUES (?)", 1);
+    });
+    ASSERT_TRUE(r.ok());
+
+    const SpanRecord* txn = findSpan(*t, "halcyon.transaction");
+    ASSERT_NE(txn, nullptr);
+    EXPECT_NE(findChild(*t, "halcyon.acquire", txn), nullptr);
 }
