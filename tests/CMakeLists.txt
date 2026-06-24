@@ -1,10 +1,31 @@
-include(FetchContent)
-FetchContent_Declare(
-    googletest
-    GIT_REPOSITORY https://github.com/google/googletest.git
-    GIT_TAG v1.15.2)
-set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
-FetchContent_MakeAvailable(googletest)
+# Prefer a locally installed GoogleTest; only fetch it as a fallback when no
+# suitable installation is found. Set HALCYON_FETCH_GTEST=ON to force fetching.
+option(HALCYON_FETCH_GTEST "Always fetch GoogleTest instead of using a local install" OFF)
+
+set(_halcyon_have_local_gtest FALSE)
+if(NOT HALCYON_FETCH_GTEST)
+    # CONFIG mode first (e.g. Homebrew/vcpkg/system installs that ship a
+    # GTestConfig.cmake), then fall back to the FindGTest module.
+    find_package(GTest CONFIG QUIET)
+    if(NOT GTest_FOUND)
+        find_package(GTest MODULE QUIET)
+    endif()
+    if(GTest_FOUND)
+        set(_halcyon_have_local_gtest TRUE)
+        message(STATUS "Halcyon: using locally installed GoogleTest")
+    endif()
+endif()
+
+if(NOT _halcyon_have_local_gtest)
+    message(STATUS "Halcyon: fetching GoogleTest via FetchContent")
+    include(FetchContent)
+    FetchContent_Declare(
+        googletest
+        GIT_REPOSITORY https://github.com/google/googletest.git
+        GIT_TAG v1.15.2)
+    set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
+    FetchContent_MakeAvailable(googletest)
+endif()
 
 find_package(Threads REQUIRED)
 
