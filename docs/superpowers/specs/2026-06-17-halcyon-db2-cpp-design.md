@@ -361,6 +361,25 @@ struct Tracer {                            // observability/tracing.hpp
 `halcyon.reconnect`, with attributes `db.system=db2`, `db.statement` (optionally
 redacted), `db.rows_affected`, `error.sqlstate`.
 
+### Context propagation
+
+Halcyon spans propagate parent context so they form a correct trace:
+
+- **Nesting:** a started span is the active span for its lifetime, so nested
+  Halcyon spans (`halcyon.transaction` → `halcyon.query`/`halcyon.execute` →
+  `halcyon.acquire`) and any user spans created inside a `transaction(fn)`
+  callback parent correctly.
+- **Async:** `executeAsync`/`queryAsync` capture the caller's active context at
+  submit time and re-parent the worker-thread span under it, so async spans are
+  not orphaned roots.
+- **Explicit parent:** `Database::useParentContext(ctx)` returns a RAII guard
+  that parents all Halcyon spans created on the current thread (sync and async)
+  under `ctx`. Build `ctx` with the OTel adapter helpers
+  `obs::make_otel_active_context()` or `obs::extract_otel_context(headers)` —
+  the latter extracts W3C `traceparent`/`tracestate` to continue a distributed
+  trace in a server handler. The parent context is opaque above the adapter
+  (`obs::SpanContext`); no `opentelemetry-cpp` types appear in public headers.
+
 ## 10. Build & Packaging
 
 - CMake (min 3.20). Targets: `halcyon::halcyon` (shared + static). C++17.
