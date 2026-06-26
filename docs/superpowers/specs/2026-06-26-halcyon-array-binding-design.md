@@ -154,7 +154,11 @@ public contract ("total rows inserted").
   preserved.
 - `Database::executeBatch` (database.hpp:367) is **unchanged** — it still leases,
   delegates, and discards a broken connection on `ErrorCode::Connection`.
-- No public header or signature changes.
+- **New:** `Transaction::executeBatch` (transaction.hpp) and
+  `ScopedTransaction::executeBatch(const Batch&)` (database.hpp) are added as
+  forwarders, mirroring the existing `execute`/`query` forwarders. Without them
+  the §7 "batch inside a transaction" atomicity pattern is not expressible
+  through the facade. These are additive — no existing signature changes.
 
 ## 5. Mock + tests
 
@@ -194,9 +198,10 @@ failing row" is no longer literally true. The v1 contract:
   the diagnostics with that row index in the message for diagnosability. No
   per-row result vector (non-goal).
 - **Atomicity is the caller's, via a transaction.** Wrap the batch in
-  `begin()`/`commit()` for all-or-nothing; on error, roll back and re-drive the
-  whole batch. This matches the existing "no auto-retry — caller re-drives on
-  failure" note at connection.hpp:372 / database.hpp:367.
+  `begin()` → `tx.executeBatch(...)` → `commit()` for all-or-nothing; on error,
+  roll back and re-drive the whole batch. This matches the existing "no
+  auto-retry — caller re-drives on failure" note at connection.hpp:372 /
+  database.hpp:367. (Requires the new `ScopedTransaction::executeBatch`, §4.)
 
 ## 8. Performance & large batches
 
