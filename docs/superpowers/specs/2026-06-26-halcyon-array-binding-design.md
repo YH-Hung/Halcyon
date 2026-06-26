@@ -88,14 +88,20 @@ db2_cli_driver.cpp:159). Type→CLI mapping is identical to the scalar
 `int64`→`SQL_C_SBIGINT`/`SQL_BIGINT`, `double`→`SQL_C_DOUBLE`/`SQL_DOUBLE`,
 `string`→`SQL_C_CHAR`/`SQL_VARCHAR`, `bytes`→`SQL_C_BINARY`/`SQL_BINARY`.
 
-### 3.2 Mixed-type guard
+### 3.2 Mixed-type guard (validated above the seam)
 
-If a non-null element in a column is a different `Value` variant alternative than
-the column's resolved type, return an `Error` with code `ErrorCode::Mapping`
-(the existing code for value↔column type mismatches) naming the offending column
-and row index. Reflected-
-struct and tuple `batchOf` columns are homogeneous by construction, so this only
-catches hand-built malformed `Batch` objects. No coercion is attempted.
+Rectangularity and column type-homogeneity are **portable** properties of the
+`Value` variants, independent of any CLI type. They are therefore validated in
+the portable layer (`Connection::executeBatch`, §4) *before* the seam call, so
+the check is unit-testable against `MockCliDriver`. If a non-null element in a
+column is a different `Value` variant alternative than the column's resolved
+type, the portable layer returns an `Error` with code `ErrorCode::Mapping` (the
+existing code for value↔column type mismatches) naming the offending column and
+row index, and the driver is never called. Reflected-struct and tuple `batchOf`
+columns are homogeneous by construction, so this only catches hand-built
+malformed `Batch` objects. No coercion is attempted. The driver (§3.1) assumes
+validated, non-empty, rectangular, homogeneous input and resolves each column's
+CLI type from its first non-null value.
 
 ### 3.3 Column-wise buffers
 
@@ -141,7 +147,11 @@ public contract ("total rows inserted").
 - `Connection::executeBatch` (connection.hpp:372) drops its per-row loop and
   delegates to the single seam call. The empty-batch short-circuit (`return 0`)
   stays in the portable layer so the driver's precondition (non-empty) holds.
-  Statement-poisoning on error is preserved.
+  Before delegating, it validates the batch is rectangular and each column is
+  type-homogeneous ignoring NULLs (§3.2), returning `ErrorCode::Mapping` on
+  violation without calling the driver — keeping the check portable and
+  unit-testable via `MockCliDriver`. Statement-poisoning on a driver error is
+  preserved.
 - `Database::executeBatch` (database.hpp:367) is **unchanged** — it still leases,
   delegates, and discards a broken connection on `ErrorCode::Connection`.
 - No public header or signature changes.
