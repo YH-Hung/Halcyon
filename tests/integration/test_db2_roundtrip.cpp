@@ -327,3 +327,120 @@ TEST(Db2CacheIntegration, CachedStatementReuseReturnsCorrectRows) {
         EXPECT_EQ(got, 2);  // correct rows from the reused cursor
     }
 }
+
+// --- True array binding (Task 2) ---
+
+namespace {
+struct ArrRow {
+    std::int64_t id;
+    std::string name;
+    std::optional<std::int64_t> qty;  // nullable column
+};
+}  // namespace
+HALCYON_REFLECT(ArrRow, id, name, qty);
+
+TEST(Db2ArrayBinding, MultiRowInsertAggregatesCountAndNulls) {
+    auto d = dsn();
+    if (!d) GTEST_SKIP() << "HALCYON_TEST_DSN not set; skipping live Db2 test";
+    auto dbh = halcyon::Database::open(*d);
+    ASSERT_TRUE(dbh.ok()) << dbh.error().message;
+    auto& h = dbh.value();
+    h.execute("DROP TABLE halcyon_arr");  // ignore if absent
+    ASSERT_TRUE(h.execute(
+                     "CREATE TABLE halcyon_arr(id BIGINT NOT NULL, "
+                     "name VARCHAR(32), qty BIGINT)")
+                    .ok());
+
+    std::vector<ArrRow> rows = {
+        {1, "a", 10},
+        {2, "b", std::nullopt},
+        {3, "c", 30},
+        {4, "d", 40},
+        {5, "e", std::nullopt},
+    };
+    auto n = h.executeBatch(
+        "INSERT INTO halcyon_arr(id,name,qty) VALUES (?,?,?)",
+        halcyon::batchOf(rows));
+    ASSERT_TRUE(n.ok()) << n.error().message;
+    EXPECT_EQ(n.value(), 5);
+
+    auto count = h.queryAsOrThrow<BatchCount>(
+        "SELECT COUNT(*) AS c FROM halcyon_arr");
+    ASSERT_EQ(count.size(), 1u);
+    EXPECT_EQ(count[0].c, 5);
+
+    auto nulls = h.queryAsOrThrow<BatchCount>(
+        "SELECT COUNT(*) AS c FROM halcyon_arr WHERE qty IS NULL");
+    EXPECT_EQ(nulls[0].c, 2);
+
+    h.execute("DROP TABLE halcyon_arr");
+}
+
+TEST(Db2ArrayBinding, ConstraintViolationIsClassifiedAndChunkAtomic) {
+    auto d = dsn();
+    if (!d) GTEST_SKIP() << "HALCYON_TEST_DSN not set; skipping live Db2 test";
+    auto dbh = halcyon::Database::open(*d);
+    ASSERT_TRUE(dbh.ok()) << dbh.error().message;
+    auto& h = dbh.value();
+    h.execute("DROP TABLE halcyon_arr_pk");
+    ASSERT_TRUE(h.execute(
+                     "CREATE TABLE halcyon_arr_pk(id BIGINT NOT NULL PRIMARY KEY, "
+                     "name VARCHAR(32))")
+                    .ok());
+
+    // The third row duplicates id=1 -> unique-constraint violation. Db2 applies
+    // the array chunk atomically, so the whole batch is rolled back and the
+    // error is classified from SQLSTATE 23505. (Db2 CLI does not surface which
+    // row failed for an array bind, so the contract is a single classified
+    // Error, not a per-row index — wrap in a transaction and re-drive.)
+    auto batch = halcyon::batchOf({
+        std::make_tuple(std::int64_t{1}, std::string{"a"}),
+        std::make_tuple(std::int64_t{2}, std::string{"b"}),
+        std::make_tuple(std::int64_t{1}, std::string{"dup"}),
+    });
+    auto n = h.executeBatch(
+        "INSERT INTO halcyon_arr_pk(id,name) VALUES (?,?)", batch);
+    ASSERT_FALSE(n.ok());
+    EXPECT_EQ(n.error().code, halcyon::ErrorCode::Constraint);
+    EXPECT_EQ(n.error().sqlstate, "23505");
+
+    // Atomic per chunk: nothing from the failed batch is committed.
+    auto count = h.queryAsOrThrow<BatchCount>(
+        "SELECT COUNT(*) AS c FROM halcyon_arr_pk");
+    ASSERT_EQ(count.size(), 1u);
+    EXPECT_EQ(count[0].c, 0);
+
+    h.execute("DROP TABLE halcyon_arr_pk");
+}
+
+TEST(Db2ArrayBinding, MultiChunkInsertExceedsByteBudget) {
+    auto d = dsn();
+    if (!d) GTEST_SKIP() << "HALCYON_TEST_DSN not set; skipping live Db2 test";
+    auto dbh = halcyon::Database::open(*d);
+    ASSERT_TRUE(dbh.ok()) << dbh.error().message;
+    auto& h = dbh.value();
+    h.execute("DROP TABLE halcyon_arr_big");
+    ASSERT_TRUE(h.execute(
+                     "CREATE TABLE halcyon_arr_big(id BIGINT NOT NULL, "
+                     "payload VARCHAR(1100))")
+                    .ok());
+
+    // ~20 MB of bound data ( > 16 MiB budget ) forces at least two chunks.
+    const std::int64_t kRows = 20000;
+    const std::string payload(1000, 'x');
+    std::vector<std::tuple<std::int64_t, std::string>> rows;
+    rows.reserve(kRows);
+    for (std::int64_t i = 0; i < kRows; ++i) rows.emplace_back(i, payload);
+
+    auto n = h.executeBatch(
+        "INSERT INTO halcyon_arr_big(id,payload) VALUES (?,?)",
+        halcyon::batchOf(rows));
+    ASSERT_TRUE(n.ok()) << n.error().message;
+    EXPECT_EQ(n.value(), kRows);
+
+    auto count = h.queryAsOrThrow<BatchCount>(
+        "SELECT COUNT(*) AS c FROM halcyon_arr_big");
+    EXPECT_EQ(count[0].c, kRows);
+
+    h.execute("DROP TABLE halcyon_arr_big");
+}

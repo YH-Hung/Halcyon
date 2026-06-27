@@ -194,9 +194,9 @@ executes them in a single `SQLExecute` per byte-budget chunk — not per row.
 db.executeBatch("INSERT INTO t(a,b) VALUES (?,?)", batchOf(rowsVector));
 ```
 
-Any row failure surfaces as a single `Error` (message includes the first failing
-row index); wrap the call in a transaction for all-or-nothing and re-drive the
-whole batch on error. See
+Any row failure surfaces as a single classified `Error` (SQLSTATE → `ErrorCode`);
+each chunk is atomic, so a failed chunk commits nothing. Wrap the call in a
+transaction for whole-batch all-or-nothing and re-drive on error. See
 `docs/superpowers/specs/2026-06-26-halcyon-array-binding-design.md`.
 
 ## 6. Result & Error Model

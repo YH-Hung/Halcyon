@@ -59,7 +59,7 @@ executes a row-set atomically:
 // array binding, chunking internally to bound memory. Returns the total number
 // of rows affected, summed across chunks. Precondition: `rows` is non-empty and
 // rectangular (every row has identical arity). On any row failure, returns a
-// single Error whose message names the first failing row index (§7).
+// single Error carrying the Db2 diagnostic (SQLSTATE); the chunk is atomic (§7).
 virtual Result<std::int64_t> executeBatch(
     StatementHandle stmt,
     const std::vector<std::vector<Value>>& rows) = 0;
@@ -175,7 +175,8 @@ public contract ("total rows inserted").
   - empty batch → `0` (no seam call).
 - `tests/integration/test_db2_roundtrip.cpp` (live, opt-in): a large multi-chunk
   insert with verified affected count + read-back, and a constraint-violation
-  batch asserting the `Error` carries the failing row index.
+  batch asserting the `Error` is classified (SQLSTATE 23505) and the failed
+  chunk is atomic (nothing committed).
 
 ## 6. Type homogeneity (summary)
 
@@ -188,15 +189,23 @@ construction.
 ## 7. Failure & atomicity contract
 
 True array binding sends a whole parameter set in one `SQLExecute`; Db2 attempts
-every row in the set and reports per-row status, so the old "stop at the first
+the set and, on error, rolls the whole chunk back, so the old "stop at the first
 failing row" is no longer literally true. The v1 contract:
 
 - **Return type unchanged:** `Result<std::int64_t>` — total rows affected on
   success.
-- **Any row failure → a single `Error`.** The driver reads the param-status
-  array, finds the first `SQL_PARAM_ERROR` index, and builds the `Error` from
-  the diagnostics with that row index in the message for diagnosability. No
-  per-row result vector (non-goal).
+- **Any row failure → a single classified `Error`.** The driver surfaces the
+  Db2 diagnostic (SQLSTATE → `ErrorCode`, e.g. 23505 → `Constraint`). It does
+  **not** name the failing row: measured against Db2 11.5.9.0, an array-bind
+  failure leaves the param-status array at `SQL_PARAM_DIAG_UNAVAILABLE`, the
+  diagnostics carry `SQL_NO_ROW_NUMBER`, and `PARAMS_PROCESSED` is the full
+  chunk count — so the row index is not recoverable from the driver, and
+  deriving it by replay is unsafe (it would commit prior rows under autocommit,
+  or roll back the caller's work inside a transaction). No per-row result
+  vector (non-goal).
+- **Each chunk is atomic.** A failed chunk commits nothing (verified live), so
+  under autocommit the batch up to the failing chunk is applied and the failing
+  chunk is wholly rolled back.
 - **Atomicity is the caller's, via a transaction.** Wrap the batch in
   `begin()` → `tx.executeBatch(...)` → `commit()` for all-or-nothing; on error,
   roll back and re-drive the whole batch. This matches the existing "no

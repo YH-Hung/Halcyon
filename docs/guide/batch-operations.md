@@ -74,8 +74,12 @@ db.executeBatch("INSERT INTO items(id, name) VALUES (?, ?)", batch);
 
 `executeBatch` binds the rows column-wise and executes them with Db2 CLI array
 binding (one `SQLExecute` per chunk). On a row failure the call returns a single
-`Error` whose message names the first failing row index; the returned count
-reflects rows from chunks that completed before the failure.
+classified `Error` (e.g. a unique-constraint violation surfaces as
+`ErrorCode::Constraint`, SQLSTATE 23505). Each chunk is atomic — a failed chunk
+commits nothing — so under autocommit the returned count reflects whole chunks
+that completed before the failure. Db2 does not report which row in the chunk
+failed, so wrap the call in a transaction for all-or-nothing and re-drive the
+whole batch on error.
 
 `executeBatch` has no auto-retry. If the connection dies mid-batch, the returned
 `Result` carries `ErrorCode::Connection`. Retry the whole batch from your code —

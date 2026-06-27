@@ -228,17 +228,157 @@ public:
     Result<std::int64_t> executeBatch(
         StatementHandle stmt,
         const std::vector<std::vector<Value>>& rows) override {
-        // Provisional: per-row execution (Task 1). Task 2 replaces this body
-        // with true column-wise array binding. Behavior is identical for now.
-        if (!stmt_state(stmt)) return unknown_stmt();
-        std::int64_t total = 0;
-        for (const auto& row : rows) {
-            auto b = bindParams(stmt, row);
-            if (!b.ok()) return b.error();
-            auto e = execute(stmt);
-            if (!e.ok()) return e.error();
-            total += e.value();
+        StmtState* stp = stmt_state(stmt);
+        if (!stp) return unknown_stmt();
+        SQLHSTMT h = stp->handle;
+        const std::size_t nRows = rows.size();
+        if (nRows == 0) return std::int64_t{0};
+        const std::size_t nCols = rows.front().size();
+
+        // Resolve each column's CLI type from its first non-null value. Input is
+        // validated rectangular + homogeneous above the seam; an all-null column
+        // defaults to VARCHAR (mirrors the scalar null path).
+        std::vector<SQLSMALLINT> cType(nCols, SQL_C_CHAR);
+        std::vector<SQLSMALLINT> sqlType(nCols, SQL_VARCHAR);
+        std::vector<bool> isVar(nCols, true);
+        std::vector<SQLLEN> fixedW(nCols, 0);
+        for (std::size_t c = 0; c < nCols; ++c) {
+            for (std::size_t r = 0; r < nRows; ++r) {
+                const Value& v = rows[r][c];
+                if (std::holds_alternative<Null>(v)) continue;
+                if (std::holds_alternative<bool>(v)) {
+                    cType[c] = SQL_C_BIT;
+                    sqlType[c] = SQL_BIT;
+                    isVar[c] = false;
+                    fixedW[c] = 1;
+                } else if (std::holds_alternative<std::int64_t>(v)) {
+                    cType[c] = SQL_C_SBIGINT;
+                    sqlType[c] = SQL_BIGINT;
+                    isVar[c] = false;
+                    fixedW[c] = sizeof(std::int64_t);
+                } else if (std::holds_alternative<double>(v)) {
+                    cType[c] = SQL_C_DOUBLE;
+                    sqlType[c] = SQL_DOUBLE;
+                    isVar[c] = false;
+                    fixedW[c] = sizeof(double);
+                } else if (std::holds_alternative<std::string>(v)) {
+                    cType[c] = SQL_C_CHAR;
+                    sqlType[c] = SQL_VARCHAR;
+                    isVar[c] = true;
+                } else {
+                    cType[c] = SQL_C_BINARY;
+                    sqlType[c] = SQL_BINARY;
+                    isVar[c] = true;
+                }
+                break;  // first non-null defines the column
+            }
         }
+
+        constexpr std::size_t kByteBudget = 16u * 1024 * 1024;
+        std::int64_t total = 0;
+        std::size_t start = 0;
+        while (start < nRows) {
+            // Grow the chunk until adding the next row would exceed the budget.
+            // colMax tracks each var-width column's longest element in the chunk.
+            std::vector<std::size_t> colMax(nCols, 0);
+            std::size_t end = start;
+            while (end < nRows) {
+                std::vector<std::size_t> newMax = colMax;
+                for (std::size_t c = 0; c < nCols; ++c) {
+                    if (!isVar[c]) continue;
+                    const Value& v = rows[end][c];
+                    std::size_t len = 0;
+                    if (auto* s = std::get_if<std::string>(&v)) len = s->size();
+                    else if (auto* b = std::get_if<std::vector<std::byte>>(&v))
+                        len = b->size();
+                    if (len > newMax[c]) newMax[c] = len;
+                }
+                const std::size_t prospectiveRows = end - start + 1;
+                std::size_t bytes = 0;
+                for (std::size_t c = 0; c < nCols; ++c) {
+                    std::size_t w = isVar[c]
+                                        ? (newMax[c] == 0 ? 1 : newMax[c])
+                                        : static_cast<std::size_t>(fixedW[c]);
+                    bytes += w * prospectiveRows;
+                }
+                if (end > start && bytes > kByteBudget) break;  // keep >= 1 row
+                colMax = newMax;
+                ++end;
+            }
+            const std::size_t chunkRows = end - start;
+
+            // Column-wise buffers + indicator arrays; must outlive SQLExecute.
+            std::vector<std::vector<char>> buf(nCols);
+            std::vector<std::vector<SQLLEN>> ind(nCols);
+            std::vector<SQLLEN> width(nCols, 0);
+            for (std::size_t c = 0; c < nCols; ++c) {
+                width[c] = isVar[c]
+                               ? static_cast<SQLLEN>(colMax[c] == 0 ? 1 : colMax[c])
+                               : fixedW[c];
+                buf[c].assign(static_cast<std::size_t>(width[c]) * chunkRows, 0);
+                ind[c].assign(chunkRows, 0);
+                for (std::size_t i = 0; i < chunkRows; ++i) {
+                    const Value& v = rows[start + i][c];
+                    char* slot = buf[c].data() +
+                                 static_cast<std::size_t>(width[c]) * i;
+                    if (std::holds_alternative<Null>(v)) {
+                        ind[c][i] = SQL_NULL_DATA;
+                    } else if (auto* b = std::get_if<bool>(&v)) {
+                        *slot = static_cast<char>(*b ? 1 : 0);
+                    } else if (auto* p = std::get_if<std::int64_t>(&v)) {
+                        std::memcpy(slot, p, sizeof(*p));
+                    } else if (auto* dd = std::get_if<double>(&v)) {
+                        std::memcpy(slot, dd, sizeof(*dd));
+                    } else if (auto* s = std::get_if<std::string>(&v)) {
+                        std::memcpy(slot, s->data(), s->size());
+                        ind[c][i] = static_cast<SQLLEN>(s->size());
+                    } else {
+                        const auto& by = std::get<std::vector<std::byte>>(v);
+                        std::memcpy(slot, by.data(), by.size());
+                        ind[c][i] = static_cast<SQLLEN>(by.size());
+                    }
+                }
+            }
+
+            SQLSetStmtAttr(h, SQL_ATTR_PARAMSET_SIZE,  // NOLINT(performance-no-int-to-ptr)
+                           reinterpret_cast<SQLPOINTER>(static_cast<SQLULEN>(chunkRows)), 0);
+            SQLSetStmtAttr(h, SQL_ATTR_PARAM_BIND_TYPE,  // NOLINT(performance-no-int-to-ptr)
+                           reinterpret_cast<SQLPOINTER>(
+                               static_cast<SQLULEN>(SQL_PARAM_BIND_BY_COLUMN)),
+                           0);
+
+            for (std::size_t c = 0; c < nCols; ++c) {
+                SQLRETURN rc = SQLBindParameter(
+                    h, static_cast<SQLUSMALLINT>(c + 1), SQL_PARAM_INPUT,
+                    cType[c], sqlType[c], static_cast<SQLULEN>(width[c]), 0,
+                    buf[c].data(), width[c], ind[c].data());
+                if (!cli_ok(rc)) {
+                    Error e = make_error(SQL_HANDLE_STMT, h, ErrorCode::Unknown,
+                                         "SQLBindParameter (array) failed");
+                    reset_paramset(h);
+                    return e;
+                }
+            }
+
+            SQLRETURN rc = SQLExecute(h);
+            if (!cli_ok(rc) && rc != SQL_NO_DATA) {
+                // Db2 applies each array chunk atomically: a failed chunk commits
+                // nothing. The CLI driver does not expose which row failed (the
+                // param-status array reports SQL_PARAM_DIAG_UNAVAILABLE and the
+                // diagnostics carry no row number), so surface the Db2 diagnostic
+                // (SQLSTATE) as-is. Wrap the call in a transaction for whole-batch
+                // atomicity and re-drive on error.
+                Error e = make_error(SQL_HANDLE_STMT, h, ErrorCode::Unknown,
+                                     "SQLExecute (array binding) failed");
+                reset_paramset(h);
+                return e;
+            }
+            SQLLEN affected = 0;
+            SQLRowCount(h, &affected);
+            total += affected < 0 ? 0 : static_cast<std::int64_t>(affected);
+            start = end;
+        }
+        reset_paramset(h);
         return total;
     }
 
@@ -425,6 +565,13 @@ private:
         if (!cli_ok(rc))
             return make_error(SQL_HANDLE_DBC, dbc, ErrorCode::Unknown, context);
         return Result<void>();
+    }
+
+    // Restores single-row paramset state so a cached statement is clean for
+    // later scalar bindParams/execute reuse.
+    static void reset_paramset(SQLHSTMT h) {
+        SQLSetStmtAttr(h, SQL_ATTR_PARAMSET_SIZE,  // NOLINT(performance-no-int-to-ptr)
+                       reinterpret_cast<SQLPOINTER>(static_cast<SQLULEN>(1)), 0);
     }
 
     // Reads a (possibly long) character column by looping SQLGetData.
