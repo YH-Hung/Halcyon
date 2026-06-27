@@ -1,7 +1,8 @@
 # Batch Operations
 
-`Database::executeBatch` inserts multiple rows using a single prepared statement,
-calling execute once per row and accumulating the total affected-row count.
+`Database::executeBatch` inserts multiple rows with a single prepared statement
+using Db2 CLI **array binding**: rows are bound column-wise and sent to the
+server in one `SQLExecute` per chunk, returning the total affected-row count.
 
 ## `batchOf` from reflected structs
 
@@ -71,9 +72,10 @@ db.executeBatch("INSERT INTO items(id, name) VALUES (?, ?)", batch);
 
 ## Error handling and retry
 
-`executeBatch` runs each row individually — not as a server-side array bind.
-The total affected-row count is returned. On a mid-batch failure, the count
-reflects rows inserted before the failure; rows after the failure are not attempted.
+`executeBatch` binds the rows column-wise and executes them with Db2 CLI array
+binding (one `SQLExecute` per chunk). On a row failure the call returns a single
+`Error` whose message names the first failing row index; the returned count
+reflects rows from chunks that completed before the failure.
 
 `executeBatch` has no auto-retry. If the connection dies mid-batch, the returned
 `Result` carries `ErrorCode::Connection`. Retry the whole batch from your code —
@@ -90,10 +92,17 @@ auto r = db.transaction([&](halcyon::Transaction& tx) -> halcyon::Result<void> {
 });
 ```
 
-## Performance note
+## Performance & large batches
 
-For very large imports (millions of rows), consider using Db2's native `LOAD`
-utility or `IMPORT` command instead — they bypass logging and are orders of
-magnitude faster than per-row `INSERT`. `executeBatch` is best for application-level
-bulk writes of up to a few thousand rows where you need row-level error visibility
-and transactional guarantees.
+Array binding collapses N per-row round-trips into one execute per ~16 MiB
+chunk. For throughput, wrap the batch in a transaction (`db.begin()` →
+`executeBatch` → `commit`) so the whole load commits once instead of once per
+chunk.
+
+For very large all-or-nothing loads, a single transaction holds row locks and
+transaction-log space until commit, which can trigger lock escalation or a full
+transaction log. Chunking bounds client memory, not server log/lock pressure —
+so for multi-million-row loads, split into several independently-committed
+`executeBatch` calls, trading strict whole-load atomicity for bounded log use.
+For the very largest imports, Db2's native `LOAD` utility or `IMPORT` command
+bypasses logging entirely and is faster still.

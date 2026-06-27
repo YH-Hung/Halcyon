@@ -187,9 +187,17 @@ tx.commit();
 
 ### Bulk / batch (v1 in-scope)
 
+`executeBatch` binds many rows as a Db2 CLI **column-wise parameter array** and
+executes them in a single `SQLExecute` per byte-budget chunk — not per row.
+
 ```cpp
 db.executeBatch("INSERT INTO t(a,b) VALUES (?,?)", batchOf(rowsVector));
 ```
+
+Any row failure surfaces as a single `Error` (message includes the first failing
+row index); wrap the call in a transaction for all-or-nothing and re-drive the
+whole batch on error. See
+`docs/superpowers/specs/2026-06-26-halcyon-array-binding-design.md`.
 
 ## 6. Result & Error Model
 
