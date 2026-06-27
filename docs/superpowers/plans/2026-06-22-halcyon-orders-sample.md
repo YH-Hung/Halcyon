@@ -60,7 +60,7 @@ cmake --build "${HALCYON_BUILD}" -j
 - Create: `samples/orders/sql/schema.sql`
 - Create: `samples/orders/sql/seed.sql`
 
-- [ ] **Step 1: Write `samples/orders/sql/schema.sql`**
+- [x] **Step 1: Write `samples/orders/sql/schema.sql`**
 
 ```sql
 -- Halcyon orders sample — schema.
@@ -87,7 +87,7 @@ CREATE TABLE orders (
 );
 ```
 
-- [ ] **Step 2: Write `samples/orders/sql/seed.sql`**
+- [x] **Step 2: Write `samples/orders/sql/seed.sql`**
 
 ```sql
 -- Halcyon orders sample — seed data. Apply after schema.sql:
@@ -105,12 +105,12 @@ INSERT INTO orders(order_no, customer_id, status, total_amount, order_ts) VALUES
     ('ORD-1004', 3, 'CANCELLED', '15.00', '2026-04-04 14:45:00');
 ```
 
-- [ ] **Step 3: Sanity-check the SQL files exist and parse visually**
+- [x] **Step 3: Sanity-check the SQL files exist and parse visually**
 
 These are applied against the live container in Task 2; here just confirm both
 files were written and the column lists match the spec schema. No command.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add samples/orders/sql/schema.sql samples/orders/sql/seed.sql
@@ -124,7 +124,7 @@ git commit -m "feat: add orders sample schema and seed SQL"
 **Files:**
 - Create: `samples/orders/load_sql.sh`
 
-- [ ] **Step 1: Write `samples/orders/load_sql.sh`**
+- [x] **Step 1: Write `samples/orders/load_sql.sh`**
 
 ```bash
 #!/usr/bin/env bash
@@ -148,7 +148,7 @@ done
 echo "==> done"
 ```
 
-- [ ] **Step 2: Make it executable**
+- [x] **Step 2: Make it executable**
 
 Run: `chmod +x samples/orders/load_sql.sh`
 Expected: no output, exit 0.
@@ -175,7 +175,7 @@ docker compose -f docker/docker-compose.yml exec -T db2 \
 ```
 Expected: `3` then `4`.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add samples/orders/load_sql.sh
@@ -194,7 +194,7 @@ before the full walkthrough is written. The minimal file is replaced in Task 5.
 - Create: `samples/orders/CMakeLists.txt`
 - Create: `samples/orders/src/orders_oo.cpp` (temporary minimal version)
 
-- [ ] **Step 1: Write `samples/orders/CMakeLists.txt`**
+- [x] **Step 1: Write `samples/orders/CMakeLists.txt`**
 
 ```cmake
 cmake_minimum_required(VERSION 3.20)
@@ -216,7 +216,7 @@ target_link_libraries(orders_oo         PRIVATE halcyon::halcyon)
 target_link_libraries(orders_functional PRIVATE halcyon::halcyon)
 ```
 
-- [ ] **Step 2: Write a temporary minimal `samples/orders/src/orders_oo.cpp`**
+- [x] **Step 2: Write a temporary minimal `samples/orders/src/orders_oo.cpp`**
 
 This uses `query` + `Row::as<>` (not `queryAs<T>`, which requires a
 `HALCYON_REFLECT`'d struct — a bare scalar is not reflected). It mirrors the
@@ -251,7 +251,7 @@ int main() {
 }
 ```
 
-- [ ] **Step 3: Create the temporary functional stub so CMake configures**
+- [x] **Step 3: Create the temporary functional stub so CMake configures**
 
 The CMake lists two executables; create a matching minimal
 `samples/orders/src/orders_functional.cpp` (replaced in Task 6):
@@ -282,7 +282,7 @@ Expected: configures (finds Halcyon + DB2CLI), builds `orders_oo` and
 Run: `"${SAMPLE_DIR}/build/orders_oo"`
 Expected: `connected, value=1` and exit 0. (Db2 from Task 2 must be up.)
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add samples/orders/CMakeLists.txt samples/orders/src/orders_oo.cpp samples/orders/src/orders_functional.cpp
@@ -296,7 +296,7 @@ git commit -m "feat: scaffold orders sample CMake project with connectivity smok
 **Files:**
 - Create: `samples/orders/src/orders_model.hpp`
 
-- [ ] **Step 1: Write `samples/orders/src/orders_model.hpp`**
+- [x] **Step 1: Write `samples/orders/src/orders_model.hpp`**
 
 ```cpp
 #pragma once
@@ -382,7 +382,7 @@ Run: `cmake --build "${SAMPLE_DIR}/build" --target orders_oo -j`
 Expected: compiles with no errors (validates the header + `HALCYON_REFLECT`
 expansions). Remove the temporary include afterward — Task 5 rewrites the file.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add samples/orders/src/orders_model.hpp
@@ -396,7 +396,7 @@ git commit -m "feat: add shared orders sample model header"
 **Files:**
 - Modify (replace): `samples/orders/src/orders_oo.cpp`
 
-- [ ] **Step 1: Replace `samples/orders/src/orders_oo.cpp` with the full walkthrough**
+- [x] **Step 1: Replace `samples/orders/src/orders_oo.cpp` with the full walkthrough**
 
 ```cpp
 // Halcyon orders sample — object-oriented / throwing style.
@@ -501,7 +501,7 @@ Run: `"${SAMPLE_DIR}/build/orders_oo"` a second time.
 Expected: identical output, exit 0 (the `kResetDemoRows` delete makes the
 inserts/updates repeatable; no duplicate-key error).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add samples/orders/src/orders_oo.cpp
@@ -515,7 +515,7 @@ git commit -m "feat: implement OO-style orders sample walkthrough"
 **Files:**
 - Modify (replace): `samples/orders/src/orders_functional.cpp`
 
-- [ ] **Step 1: Replace `samples/orders/src/orders_functional.cpp` with the full walkthrough**
+- [x] **Step 1: Replace `samples/orders/src/orders_functional.cpp` with the full walkthrough**
 
 ```cpp
 // Halcyon orders sample — functional / Result<T> style.
@@ -626,7 +626,7 @@ diff /tmp/oo.out /tmp/func.out && echo "IDENTICAL"
 Expected: `diff` prints nothing and then `IDENTICAL` (both binaries produce the
 same transcript); each exits 0.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add samples/orders/src/orders_functional.cpp
@@ -640,7 +640,7 @@ git commit -m "feat: implement functional-style orders sample walkthrough"
 **Files:**
 - Create: `samples/orders/README.md`
 
-- [ ] **Step 1: Write `samples/orders/README.md`**
+- [x] **Step 1: Write `samples/orders/README.md`**
 
 ````markdown
 # Halcyon Orders Sample
@@ -763,7 +763,7 @@ Confirm the expected-output block matches what Tasks 5–6 actually printed
 (customer rows, counts, final `ORD-2001 SHIPPED $129.99`). Adjust the README's
 transcript if Db2's timestamp/decimal text differs on your build, then re-verify.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add samples/orders/README.md
@@ -777,7 +777,7 @@ git commit -m "docs: add orders sample README with setup procedure"
 **Files:**
 - Modify: `README.md:205`
 
-- [ ] **Step 1: Add a `samples/` line to the repository layout block**
+- [x] **Step 1: Add a `samples/` line to the repository layout block**
 
 In `README.md`, the layout block currently has (around line 205):
 
@@ -794,12 +794,12 @@ samples/orders/           Standalone consumer sample (find_package + local Db2)
 docker/                   Db2 Compose for integration tests
 ```
 
-- [ ] **Step 2: Verify the edit**
+- [x] **Step 2: Verify the edit**
 
 Run: `git diff README.md`
 Expected: the single added `samples/orders/` line in the layout block.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add README.md

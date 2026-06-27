@@ -1,6 +1,6 @@
 # OpenTelemetry Parent Context Propagation Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Make Halcyon a well-behaved trace participant — nested spans parent correctly, async spans inherit the caller's active context across the executor thread boundary, and callers can attach Halcyon spans to an explicit parent (e.g. a remote parent from a W3C `traceparent` header).
 
@@ -39,7 +39,7 @@
   - `Tracer::attachContext(const std::shared_ptr<SpanContext>&) -> std::unique_ptr<ContextToken>` (default `nullptr`).
   - `class obs::ScopedContext` — null-tolerant, movable RAII wrapper around `std::unique_ptr<ContextToken>`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Add to `tests/unit/test_observability.cpp` (after the existing includes/usings, e.g. near the other `TEST(Observability, ...)` blocks):
 
@@ -56,12 +56,12 @@ TEST(Observability, NoopTracerContextDefaultsAreInert) {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `cmake -S . -B build -DHALCYON_BUILD_TESTS=ON && cmake --build build -j 2>&1 | tail -20`
 Expected: COMPILE FAIL — `no member named 'captureContext'` / `attachContext` / no 3-arg `startSpan` / `ScopedContext` not declared.
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 In `include/halcyon/observability/tracing.hpp`, insert the two opaque structs *before* `struct Tracer` (right after `struct Span { ... };`) and extend `Tracer`:
 
@@ -134,12 +134,12 @@ private:
 };
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `cmake --build build -j && ctest --test-dir build -R NoopTracerContextDefaultsAreInert --output-on-failure`
 Expected: PASS. Also confirm the whole suite still builds/passes: `ctest --test-dir build --output-on-failure`.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add include/halcyon/observability/tracing.hpp tests/unit/test_observability.cpp
@@ -167,7 +167,7 @@ the core already produces given an activating tracer. No production code changes
   - `RecordingTracer` overrides all three new `Tracer` methods; `RecordingSpan` self-activates.
   - `const SpanRecord* findChild(const RecordingTracer&, const std::string& name, const void* parent);`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Add these tests to `tests/unit/test_observability.cpp`:
 
@@ -208,12 +208,12 @@ TEST(Observability, TransactionSpanParentsAcquire) {
 }
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `cmake --build build -j 2>&1 | tail -20`
 Expected: COMPILE FAIL — `SpanRecord` has no member `parent`; `findChild` not declared.
 
-- [ ] **Step 3: Upgrade the recording doubles (the implementation)**
+- [x] **Step 3: Upgrade the recording doubles (the implementation)**
 
 In `tests/unit/test_observability.cpp`, replace the existing `SpanRecord`,
 `RecordingSpan`, `RecordingTracer`, and `findSpan` block with the context-aware
@@ -332,12 +332,12 @@ const SpanRecord* findChild(const RecordingTracer& t, const std::string& name,
 > existing `SpansCarrySystemAndStatement` / `ErrorPathMarksSpanErrored` tests —
 > they continue to use `findSpan` and pass unchanged.
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `cmake --build build -j && ctest --test-dir build -R "QuerySpanParentsAcquire|TransactionSpanParentsAcquire" --output-on-failure`
 Expected: PASS. Also run the full suite: `ctest --test-dir build --output-on-failure` — all green.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add tests/unit/test_observability.cpp
@@ -356,7 +356,7 @@ git commit -m "test: model active-context stack and span nesting in recording tr
 - Consumes: `tracer_` / `has_tracer_` members; `obs::ScopedContext`, `obs::SpanContext`, `obs::ContextToken` (Task 1); `RecordingContext`, `RecordingTracer`, `findSpan` (Task 2).
 - Produces: `[[nodiscard]] obs::ScopedContext Database::useParentContext(std::shared_ptr<obs::SpanContext> ctx);`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Add to `tests/unit/test_observability.cpp`:
 
@@ -388,12 +388,12 @@ TEST(Observability, UseParentContextParentsSyncSpans) {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `cmake --build build -j 2>&1 | tail -20`
 Expected: COMPILE FAIL — `no member named 'useParentContext' in 'halcyon::Database'`.
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 In `include/halcyon/database.hpp`, add the method in the public section, right
 after the `queryAsync` method and before the `private:` label:
@@ -412,12 +412,12 @@ after the `queryAsync` method and before the `private:` label:
     }
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `cmake --build build -j && ctest --test-dir build -R UseParentContextParentsSyncSpans --output-on-failure`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add include/halcyon/database.hpp tests/unit/test_observability.cpp
@@ -436,7 +436,7 @@ git commit -m "feat: add Database::useParentContext guard for explicit trace par
 - Consumes: `instrument(...)`, `executeAsync`, `queryAsync`, `captureContext`, `useParentContext` (Task 3), `RecordingContext`/`RecordingTracer` (Task 2).
 - Produces: `instrument` gains a trailing `const obs::SpanContext* parent = nullptr`; `executeAsync`/`queryAsync` capture context at submit and forward it.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Add to `tests/unit/test_observability.cpp`:
 
@@ -471,13 +471,13 @@ TEST(Observability, QueryAsyncInheritsCallerContext) {
 > `halcyon/database.hpp`; add `#include <future>` to the test file if the build
 > reports it missing.
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `cmake --build build -j && ctest --test-dir build -R QueryAsyncInheritsCallerContext --output-on-failure`
 Expected: FAIL — the async `halcyon.query` span runs on a worker thread with an
 empty active stack, so `q->parent` is `nullptr`, not `&marker`.
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 In `include/halcyon/database.hpp`:
 
@@ -555,12 +555,12 @@ and the span construction inside it:
     }
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `cmake --build build -j && ctest --test-dir build -R QueryAsyncInheritsCallerContext --output-on-failure`
 Expected: PASS. Then the full suite: `ctest --test-dir build --output-on-failure`.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add include/halcyon/database.hpp tests/unit/test_observability.cpp
@@ -588,7 +588,7 @@ git commit -m "feat: propagate caller trace context into async execute/query spa
 > SDK + in-memory span exporter) installed. The test target builds only when the
 > adapter is enabled.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `tests/unit/test_otel_propagation.cpp`:
 
@@ -739,7 +739,7 @@ TEST(OtelAdapter, AsyncInheritsActiveSpanAcrossThreads) {
 }
 ```
 
-- [ ] **Step 2: Wire the OTel test target + run to verify it fails**
+- [x] **Step 2: Wire the OTel test target + run to verify it fails**
 
 In `tests/CMakeLists.txt`, after the `gtest_discover_tests(halcyon_unit_tests)`
 line and before the `if(HALCYON_BUILD_INTEGRATION_TESTS)` block, add:
@@ -767,7 +767,7 @@ cmake --build build-otel -j 2>&1 | tail -25
 Expected: COMPILE/LINK FAIL — `make_otel_active_context` / `extract_otel_context`
 are not declared, and `OtelTracer` does not override the new methods.
 
-- [ ] **Step 3: Implement the adapter**
+- [x] **Step 3: Implement the adapter**
 
 In `include/halcyon/observability/otel_adapter.hpp`, add the includes and the two
 helper declarations:
@@ -960,7 +960,7 @@ std::shared_ptr<SpanContext> extract_otel_context(
 }  // namespace halcyon::obs
 ```
 
-- [ ] **Step 4: Run the OTel tests to verify they pass**
+- [x] **Step 4: Run the OTel tests to verify they pass**
 
 Run:
 ```bash
@@ -970,7 +970,7 @@ ctest --test-dir build-otel -R OtelAdapter --output-on-failure
 Expected: PASS (3 tests). Also rebuild/run the non-OTel suite to confirm no
 regression: `cmake --build build -j && ctest --test-dir build --output-on-failure`.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add include/halcyon/observability/otel_adapter.hpp \
@@ -990,7 +990,7 @@ git commit -m "feat: OTel adapter self-activates spans and propagates parent con
 - Consumes: the shipped behavior from Tasks 1–5.
 - Produces: spec §9 documents context propagation and the caller entry points.
 
-- [ ] **Step 1: Update the "Tracing spans" subsection**
+- [x] **Step 1: Update the "Tracing spans" subsection**
 
 In `docs/superpowers/specs/2026-06-17-halcyon-db2-cpp-design.md`, locate the
 "### Tracing spans" subsection and append a "Context propagation" paragraph
@@ -1017,14 +1017,14 @@ Halcyon spans propagate parent context so they form a correct trace:
   (`obs::SpanContext`); no `opentelemetry-cpp` types appear in public headers.
 ```
 
-- [ ] **Step 2: Verify the doc renders and references are accurate**
+- [x] **Step 2: Verify the doc renders and references are accurate**
 
 Run: `grep -n "Context propagation" docs/superpowers/specs/2026-06-17-halcyon-db2-cpp-design.md`
 Expected: one match; confirm the surrounding section reads correctly and the
 helper/method names match the shipped API (`useParentContext`,
 `make_otel_active_context`, `extract_otel_context`).
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add docs/superpowers/specs/2026-06-17-halcyon-db2-cpp-design.md
