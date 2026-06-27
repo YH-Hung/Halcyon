@@ -76,6 +76,12 @@ public:
         const std::vector<std::vector<detail::cli::Value>>& rows) {
         return conn_->executeBatch(sql, rows);
     }
+    // Ergonomic Batch overload so `tx.executeBatch(sql, batchOf(rows))` works in
+    // the functional transaction facade, matching ScopedTransaction.
+    Result<std::int64_t> executeBatch(const std::string& sql,
+                                      const Batch& batch) {
+        return conn_->executeBatch(sql, batch.rows);
+    }
 
     Result<void> commit() {
         if (!active_) return Result<void>();

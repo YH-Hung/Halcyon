@@ -83,15 +83,16 @@ whole batch on error.
 
 `executeBatch` has no auto-retry. If the connection dies mid-batch, the returned
 `Result` carries `ErrorCode::Connection`. Retry the whole batch from your code —
-not just the failed row — or use a transaction to make the whole batch atomic:
+not just the failed row — or wrap the batch in a transaction so the whole load is
+atomic (one commit). `executeBatch` is available on the transaction handle in
+both styles — `db.begin()` (`ScopedTransaction`) and the functional
+`db.transaction(...)` facade:
 
 ```cpp
 auto r = db.transaction([&](halcyon::Transaction& tx) -> halcyon::Result<void> {
-    for (const auto& e : events) {
-        auto res = tx.execute(
-            "INSERT INTO events(ts_ms, kind) VALUES (?, ?)", e.ts_ms, e.kind);
-        if (!res.ok()) return res.error();
-    }
+    auto n = tx.executeBatch(
+        "INSERT INTO events(ts_ms, kind) VALUES (?, ?)", halcyon::batchOf(events));
+    if (!n.ok()) return n.error();
     return {};
 });
 ```

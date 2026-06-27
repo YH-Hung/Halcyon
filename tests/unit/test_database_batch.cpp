@@ -195,3 +195,22 @@ TEST(Batch, ExecutesInsideTransaction) {
     EXPECT_FALSE(driver.autoCommitCalls.front());
     EXPECT_TRUE(driver.autoCommitCalls.back());
 }
+
+TEST(Batch, ExecutesInsideFunctionalTransaction) {
+    MockCliDriver driver;
+    driver.batchRowCounts.push_back(2);
+    auto db = Database::open(driver, "X", noThread()).value();
+
+    // The functional facade hands the body a Transaction&; the Batch overload of
+    // Transaction::executeBatch makes batchOf(...) usable here, not just on
+    // ScopedTransaction.
+    auto batch = halcyon::batchOf<Pair>({{1, "a"}, {2, "b"}});
+    auto r = db.transaction(
+        [&](halcyon::Transaction& tx) -> halcyon::Result<std::int64_t> {
+            return tx.executeBatch("INSERT INTO t(a,b) VALUES (?,?)", batch);
+        });
+    ASSERT_TRUE(r.ok());
+    EXPECT_EQ(r.value(), 2);
+    EXPECT_EQ(driver.executeBatchCalls, 1);
+    EXPECT_EQ(driver.commitCalls, 1);
+}

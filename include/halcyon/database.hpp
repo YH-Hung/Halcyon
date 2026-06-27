@@ -47,10 +47,9 @@ void batch_append_tuple(std::vector<detail::cli::Value>& row, const Tuple& t,
 
 }  // namespace detail
 
-// A prepared set of positional parameter rows for executeBatch.
-struct Batch {
-    std::vector<std::vector<detail::cli::Value>> rows;
-};
+// `Batch` is defined in parameters.hpp so the executeBatch(Batch) overload is
+// available on both Transaction and ScopedTransaction. The batchOf helpers
+// below construct it.
 
 // batchOf for a vector of HALCYON_REFLECT'd structs: each field becomes a
 // positional bind in declaration order.
