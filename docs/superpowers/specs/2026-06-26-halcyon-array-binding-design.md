@@ -126,15 +126,18 @@ Per chunk:
 
 1. `SQLSetStmtAttr(SQL_ATTR_PARAMSET_SIZE, chunkRows)`
 2. `SQLSetStmtAttr(SQL_ATTR_PARAM_BIND_TYPE, SQL_PARAM_BIND_BY_COLUMN)`
-3. `SQLSetStmtAttr(SQL_ATTR_PARAM_STATUS_PTR, statusArray)` —
-   `SQLUSMALLINT[chunkRows]`
-4. `SQLSetStmtAttr(SQL_ATTR_PARAMS_PROCESSED_PTR, &processed)` — `SQLULEN`
-5. one `SQLBindParameter` per column (array buffer + indicator array)
-6. one `SQLExecute`
-7. `SQLRowCount` → aggregate affected count for the chunk; add to running total
+3. one `SQLBindParameter` per column (array buffer + indicator array)
+4. one `SQLExecute`
+5. `SQLRowCount` → aggregate affected count for the chunk; add to running total
 
-After the final chunk, reset `SQL_ATTR_PARAMSET_SIZE` to 1 and clear the status/
-processed pointers so the cached statement is clean for later scalar reuse.
+The CLI status pointers (`SQL_ATTR_PARAM_STATUS_PTR`,
+`SQL_ATTR_PARAMS_PROCESSED_PTR`) are **not** set: per §7, this Db2 build does not
+populate per-row status for an array-bind failure, so they carry no usable
+information and are omitted. Check the `SQLRETURN` of every `SQLSetStmtAttr` and
+`SQLExecute`; on failure surface the diagnostic and abort the batch.
+
+After the final chunk, reset `SQL_ATTR_PARAMSET_SIZE` to 1 so the cached
+statement is clean for later scalar reuse (and fail if that reset is rejected).
 
 ### 3.5 Row-count aggregation
 
@@ -227,11 +230,11 @@ check.)
   it to exactly **one** commit for the whole load (`SQLEndTran` at
   transaction.hpp:73). "Transaction-for-atomicity" therefore *removes* log
   forces; it is the standard Db2 bulk-insert pattern.
-- **The status/error machinery is free on the success path.**
-  `SQL_ATTR_PARAM_STATUS_PTR`/`PARAMS_PROCESSED_PTR` are pointers Db2 fills
-  during execute; writing N status words is trivial beside the inserts, and the
-  `SQLUSMALLINT[chunkRows]` status array is tiny beside the column buffers. The
-  status array is only *read* on the error path (an O(chunkRows) scan).
+- **No per-row status machinery on any path.** Because this Db2 build does not
+  populate per-row status for an array-bind failure (§7), the implementation
+  omits `SQL_ATTR_PARAM_STATUS_PTR`/`PARAMS_PROCESSED_PTR` entirely — neither the
+  success path nor the error path allocates or scans a status array. The error
+  path simply surfaces the Db2 diagnostic (SQLSTATE).
 - **"Re-drive on error" cost is bounded by error rate ≈ 0** for a write path.
   Inside a transaction a failed batch rolled back, so re-driving the whole batch
   is correct (nothing to skip). Frequent partial failures on huge batches are

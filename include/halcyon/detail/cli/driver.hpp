@@ -54,8 +54,9 @@ public:
     // Binds `rows` as a column-wise parameter array and executes via array
     // binding, chunking internally to bound memory. Returns total rows affected,
     // summed across chunks. Precondition: `rows` is non-empty, rectangular, and
-    // each column is type-homogeneous (validated above the seam). On any row
-    // failure, returns a single Error naming the first failing row index.
+    // each column is type-homogeneous (validated above the seam). On failure
+    // returns a single classified Error (SQLSTATE -> ErrorCode); each chunk is
+    // atomic, and the failing row index is not recoverable from the driver.
     virtual Result<std::int64_t> executeBatch(
         StatementHandle stmt,
         const std::vector<std::vector<Value>>& rows) = 0;

@@ -308,19 +308,28 @@ public:
             const std::size_t chunkRows = end - start;
 
             // Column-wise buffers + indicator arrays; must outlive SQLExecute.
-            std::vector<std::vector<char>> buf(nCols);
+            // Each column's byte buffer is backed by std::int64_t storage so its
+            // base is 8-byte aligned by construction: fixed-width
+            // SQL_C_SBIGINT/SQL_C_DOUBLE slots (stride == 8) are then correctly
+            // aligned for the CLI's typed reads, instead of relying on the
+            // default-new alignment of a char array.
+            std::vector<std::vector<std::int64_t>> buf(nCols);
             std::vector<std::vector<SQLLEN>> ind(nCols);
             std::vector<SQLLEN> width(nCols, 0);
             for (std::size_t c = 0; c < nCols; ++c) {
                 width[c] = isVar[c]
                                ? static_cast<SQLLEN>(colMax[c] == 0 ? 1 : colMax[c])
                                : fixedW[c];
-                buf[c].assign(static_cast<std::size_t>(width[c]) * chunkRows, 0);
+                const std::size_t nbytes =
+                    static_cast<std::size_t>(width[c]) * chunkRows;
+                buf[c].assign(
+                    (nbytes + sizeof(std::int64_t) - 1) / sizeof(std::int64_t),
+                    0);
+                char* base = reinterpret_cast<char*>(buf[c].data());
                 ind[c].assign(chunkRows, 0);
                 for (std::size_t i = 0; i < chunkRows; ++i) {
                     const Value& v = rows[start + i][c];
-                    char* slot = buf[c].data() +
-                                 static_cast<std::size_t>(width[c]) * i;
+                    char* slot = base + static_cast<std::size_t>(width[c]) * i;
                     if (std::holds_alternative<Null>(v)) {
                         ind[c][i] = SQL_NULL_DATA;
                     } else if (auto* b = std::get_if<bool>(&v)) {
@@ -340,12 +349,21 @@ public:
                 }
             }
 
-            SQLSetStmtAttr(h, SQL_ATTR_PARAMSET_SIZE,  // NOLINT(performance-no-int-to-ptr)
-                           reinterpret_cast<SQLPOINTER>(static_cast<SQLULEN>(chunkRows)), 0);
-            SQLSetStmtAttr(h, SQL_ATTR_PARAM_BIND_TYPE,  // NOLINT(performance-no-int-to-ptr)
-                           reinterpret_cast<SQLPOINTER>(
-                               static_cast<SQLULEN>(SQL_PARAM_BIND_BY_COLUMN)),
-                           0);
+            SQLRETURN rcSet = SQLSetStmtAttr(  // NOLINT(performance-no-int-to-ptr)
+                h, SQL_ATTR_PARAMSET_SIZE,
+                reinterpret_cast<SQLPOINTER>(static_cast<SQLULEN>(chunkRows)), 0);
+            if (cli_ok(rcSet))
+                rcSet = SQLSetStmtAttr(  // NOLINT(performance-no-int-to-ptr)
+                    h, SQL_ATTR_PARAM_BIND_TYPE,
+                    reinterpret_cast<SQLPOINTER>(
+                        static_cast<SQLULEN>(SQL_PARAM_BIND_BY_COLUMN)),
+                    0);
+            if (!cli_ok(rcSet)) {
+                Error e = make_error(SQL_HANDLE_STMT, h, ErrorCode::Unknown,
+                                     "SQLSetStmtAttr (array binding) failed");
+                reset_paramset(h);
+                return e;
+            }
 
             for (std::size_t c = 0; c < nCols; ++c) {
                 SQLRETURN rc = SQLBindParameter(
@@ -378,7 +396,11 @@ public:
             total += affected < 0 ? 0 : static_cast<std::int64_t>(affected);
             start = end;
         }
-        reset_paramset(h);
+        // On success the reset must stick, or a later reuse of this cached
+        // statement would execute with the wrong paramset size.
+        if (!cli_ok(reset_paramset(h)))
+            return make_error(SQL_HANDLE_STMT, h, ErrorCode::Unknown,
+                              "SQLSetStmtAttr reset after array binding failed");
         return total;
     }
 
@@ -568,10 +590,12 @@ private:
     }
 
     // Restores single-row paramset state so a cached statement is clean for
-    // later scalar bindParams/execute reuse.
-    static void reset_paramset(SQLHSTMT h) {
-        SQLSetStmtAttr(h, SQL_ATTR_PARAMSET_SIZE,  // NOLINT(performance-no-int-to-ptr)
-                       reinterpret_cast<SQLPOINTER>(static_cast<SQLULEN>(1)), 0);
+    // later scalar bindParams/execute reuse. Returns the CLI status so the
+    // success path can fail if the reset did not stick.
+    static SQLRETURN reset_paramset(SQLHSTMT h) {
+        return SQLSetStmtAttr(  // NOLINT(performance-no-int-to-ptr)
+            h, SQL_ATTR_PARAMSET_SIZE,
+            reinterpret_cast<SQLPOINTER>(static_cast<SQLULEN>(1)), 0);
     }
 
     // Reads a (possibly long) character column by looping SQLGetData.
