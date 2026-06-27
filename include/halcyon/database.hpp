@@ -95,6 +95,22 @@ Batch batchOf(std::initializer_list<std::tuple<Cols...>> rows) {
     return out;
 }
 
+// batchOf for a vector of explicit tuple rows, e.g. rows built in a loop. More
+// specialized than the batchOf(std::vector<T>) struct overload, so tuple vectors
+// resolve here (no HALCYON_REFLECT required).
+template <class... Cols>
+Batch batchOf(const std::vector<std::tuple<Cols...>>& rows) {
+    Batch out;
+    out.rows.reserve(rows.size());
+    for (const auto& t : rows) {
+        std::vector<detail::cli::Value> row;
+        row.reserve(sizeof...(Cols));
+        detail::batch_append_tuple(row, t, std::index_sequence_for<Cols...>{});
+        out.rows.push_back(std::move(row));
+    }
+    return out;
+}
+
 // Owns a leased connection together with the cursor opened on it, so the row
 // range stays valid for the QueryResult's lifetime. Move-only. The facade is the
 // only layer permitted to couple a PooledConnection (pool) with a ResultSet

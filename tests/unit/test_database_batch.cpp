@@ -159,6 +159,24 @@ TEST(Batch, TupleRowsBuildPositionalBinds) {
     EXPECT_EQ(driver.executeBatchCalls, 1);
 }
 
+TEST(Batch, TupleVectorRowsBuildPositionalBinds) {
+    MockCliDriver driver;
+    auto db = Database::open(driver, "X", noThread()).value();
+
+    // Rows assembled in a vector (not an initializer_list) of tuples — resolves
+    // to the vector<tuple> overload, not the reflected-struct one.
+    std::vector<std::tuple<std::int64_t, std::string>> rows;
+    rows.emplace_back(1, "a");
+    rows.emplace_back(2, "b");
+    auto n = db.executeBatch("INSERT INTO t(a,b) VALUES (?,?)",
+                             halcyon::batchOf(rows));
+    ASSERT_TRUE(n.ok());
+    EXPECT_EQ(n.value(), 2);  // mock default return == rows.size()
+    ASSERT_EQ(driver.lastBatchRows.size(), 2u);
+    EXPECT_EQ(driver.lastBatchRows[0].size(), 2u);
+    EXPECT_EQ(driver.executeBatchCalls, 1);
+}
+
 TEST(Batch, ExecutesInsideTransaction) {
     MockCliDriver driver;
     driver.batchRowCounts.push_back(2);
