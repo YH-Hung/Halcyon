@@ -121,6 +121,23 @@ public:
         return Result<std::int64_t>(is_select(it->second.sql) ? 0 : 1);
     }
 
+    // Array binding (executeBatch seam). Derived from the same per-row logic as
+    // execute(), so fault injection and counters behave identically; returns the
+    // summed affected-row count.
+    Result<std::int64_t> executeBatch(
+        StatementHandle stmt,
+        const std::vector<std::vector<Value>>& rows) override {
+        std::int64_t total = 0;
+        for (const auto& row : rows) {
+            auto b = bindParams(stmt, row);
+            if (!b.ok()) return b.error();
+            auto e = execute(stmt);
+            if (!e.ok()) return e.error();
+            total += e.value();
+        }
+        return total;
+    }
+
     Result<std::size_t> columnCount(StatementHandle stmt) override {
         std::lock_guard<std::mutex> lk(mu_);
         auto it = stmts_.find(stmt);
