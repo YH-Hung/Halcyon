@@ -258,6 +258,25 @@ Add a batch-insert throughput benchmark to
 Run during the release-readiness live-runs phase to put numbers on §8 and catch
 any surprise.
 
+### Results
+
+Measured **2026-06-27** with `tests/stress/perf/batch_insert_bench.cpp`
+(standalone benchmark; inserts N = 50,000 rows of `(BIGINT, VARCHAR(64))`
+three ways) against the Dockerized `icr.io/db2_community/db2:11.5.9.0` on
+Apple silicon under amd64 emulation:
+
+| Strategy                | Time (50k rows) | Throughput     | vs per-row |
+|-------------------------|-----------------|----------------|------------|
+| per-row, autocommit     | 15.94 s         | 3,136 rows/s   | 1×         |
+| array binding, autocommit | 0.160 s       | 312,458 rows/s | ~100×      |
+| array binding, in a transaction | 0.158 s | 316,652 rows/s | ~101×      |
+
+**Takeaway:** array binding is ~100× faster than per-row execution, confirming
+§8. The transaction wrapper is the fastest (one commit), though only marginally
+ahead of array-autocommit here — at this size the batch fits in one byte-budget
+chunk, so autocommit already commits about once. The gap widens with multi-chunk
+loads, where autocommit commits per chunk.
+
 ## 10. Documentation impact
 
 - Design spec §5 "Bulk / batch": keep v1 in-scope, but describe it as true CLI
