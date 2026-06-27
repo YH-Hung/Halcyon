@@ -51,6 +51,15 @@ public:
     virtual Result<void> bindParams(StatementHandle stmt,
                                     const std::vector<Value>& params) = 0;
 
+    // Binds `rows` as a column-wise parameter array and executes via array
+    // binding, chunking internally to bound memory. Returns total rows affected,
+    // summed across chunks. Precondition: `rows` is non-empty, rectangular, and
+    // each column is type-homogeneous (validated above the seam). On any row
+    // failure, returns a single Error naming the first failing row index.
+    virtual Result<std::int64_t> executeBatch(
+        StatementHandle stmt,
+        const std::vector<std::vector<Value>>& rows) = 0;
+
     // Executes the statement. Returns rows affected for DML (>= 0); for a
     // result-set-producing statement the count is implementation-defined (0)
     // and the cursor becomes fetchable.

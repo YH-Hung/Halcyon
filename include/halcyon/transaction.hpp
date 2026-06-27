@@ -70,6 +70,13 @@ public:
         return conn_->template queryAs<T>(sql, named);
     }
 
+    // Batch insert within the unit of work; forwards to the leased connection.
+    Result<std::int64_t> executeBatch(
+        const std::string& sql,
+        const std::vector<std::vector<detail::cli::Value>>& rows) {
+        return conn_->executeBatch(sql, rows);
+    }
+
     Result<void> commit() {
         if (!active_) return Result<void>();
         auto c = conn_->driver().commit(conn_->handle());

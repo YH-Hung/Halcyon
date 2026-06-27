@@ -193,6 +193,10 @@ public:
     Result<std::vector<T>> queryAs(const std::string& sql, const Args&... a) {
         return txn_.template queryAs<T>(sql, a...);
     }
+    Result<std::int64_t> executeBatch(const std::string& sql,
+                                      const Batch& batch) {
+        return txn_.executeBatch(sql, batch.rows);
+    }
     Result<void> commit() { return txn_.commit(); }
     Result<void> rollback() { return txn_.rollback(); }
 

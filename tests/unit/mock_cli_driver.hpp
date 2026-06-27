@@ -48,6 +48,12 @@ public:
     std::deque<ScriptedRows> resultSets;     // execute() attaches the next one
     std::deque<std::int64_t> execRowCounts;  // execute() returns the next one
 
+    // --- batch scripting (array binding) ---
+    std::deque<std::int64_t> batchRowCounts;  // executeBatch() returns the next
+    std::deque<Error> batchErrors;            // executeBatch() fails with the next
+    int executeBatchCalls = 0;
+    std::vector<std::vector<Value>> lastBatchRows;  // rows from the last call
+
     // Optional gate invoked at the top of every execute(); lets a test block a
     // worker thread mid-call to make async/lifetime ordering deterministic.
     std::function<void()> executeHook;
@@ -107,6 +113,25 @@ public:
                             const std::vector<Value>& params) override {
         statements.at(stmt).boundParams = params;
         return Result<void>();
+    }
+
+    Result<std::int64_t> executeBatch(
+        StatementHandle stmt,
+        const std::vector<std::vector<Value>>& rows) override {
+        (void)stmt;
+        ++executeBatchCalls;
+        lastBatchRows = rows;
+        if (!batchErrors.empty()) {
+            Error e = batchErrors.front();
+            batchErrors.pop_front();
+            return Result<std::int64_t>(e);
+        }
+        if (!batchRowCounts.empty()) {
+            std::int64_t n = batchRowCounts.front();
+            batchRowCounts.pop_front();
+            return Result<std::int64_t>(n);
+        }
+        return Result<std::int64_t>(static_cast<std::int64_t>(rows.size()));
     }
 
     Result<std::int64_t> execute(StatementHandle stmt) override {

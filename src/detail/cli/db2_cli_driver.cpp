@@ -225,6 +225,23 @@ public:
         return static_cast<std::int64_t>(rows < 0 ? 0 : rows);
     }
 
+    Result<std::int64_t> executeBatch(
+        StatementHandle stmt,
+        const std::vector<std::vector<Value>>& rows) override {
+        // Provisional: per-row execution (Task 1). Task 2 replaces this body
+        // with true column-wise array binding. Behavior is identical for now.
+        if (!stmt_state(stmt)) return unknown_stmt();
+        std::int64_t total = 0;
+        for (const auto& row : rows) {
+            auto b = bindParams(stmt, row);
+            if (!b.ok()) return b.error();
+            auto e = execute(stmt);
+            if (!e.ok()) return e.error();
+            total += e.value();
+        }
+        return total;
+    }
+
     Result<std::size_t> columnCount(StatementHandle stmt) override {
         StmtState* st = stmt_state(stmt);
         if (!st) return unknown_stmt();

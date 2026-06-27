@@ -10,6 +10,7 @@
 #include <utility>
 #include <vector>
 
+#include "halcyon/detail/batch_validate.hpp"
 #include "halcyon/detail/cli/driver.hpp"
 #include "halcyon/detail/statement_cache.hpp"
 #include "halcyon/error.hpp"
@@ -367,29 +368,22 @@ public:
         return collect<T>(lease.value(), pre.value().params);
     }
 
-    // Prepares sql once (cached) and executes it for each row of positional
-    // params, accumulating affected-row counts. Stops at the first error.
+    // Validates the batch (rectangular + type-homogeneous) then delegates to the
+    // driver's array-binding executeBatch. Returns total rows affected.
     Result<std::int64_t> executeBatch(
         const std::string& sql,
         const std::vector<std::vector<detail::cli::Value>>& rows) {
         if (rows.empty()) return std::int64_t{0};
+        if (auto v = detail::validate_batch_rows(rows); !v.ok())
+            return v.error();
         auto lease = cache_->acquire(sql);
         if (!lease.ok()) return lease.error();
-        std::int64_t total = 0;
-        for (const auto& row : rows) {
-            auto b = driver_->bindParams(lease.value().handle(), row);
-            if (!b.ok()) {
-                lease.value().poison();
-                return b.error();
-            }
-            auto e = driver_->execute(lease.value().handle());
-            if (!e.ok()) {
-                lease.value().poison();
-                return e.error();
-            }
-            total += e.value();
+        auto e = driver_->executeBatch(lease.value().handle(), rows);
+        if (!e.ok()) {
+            lease.value().poison();
+            return e.error();
         }
-        return total;
+        return e.value();
     }
 
     // Begins a transaction (autocommit OFF). Defined in transaction.hpp.
