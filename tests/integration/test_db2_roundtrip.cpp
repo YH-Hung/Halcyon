@@ -373,6 +373,28 @@ TEST(Db2ArrayBinding, MultiRowInsertAggregatesCountAndNulls) {
         "SELECT COUNT(*) AS c FROM halcyon_arr WHERE qty IS NULL");
     EXPECT_EQ(nulls[0].c, 2);
 
+    // Value fidelity: every array-bound column round-trips exactly, not just the
+    // row/NULL counts. Distinct per-row int64 ids, strings, and interleaved NULL
+    // quantities catch column-wise stride, byte-order, and indicator-alignment
+    // bugs that an aggregate count would miss.
+    auto back = h.queryAsOrThrow<ArrRow>(
+        "SELECT id, name, qty FROM halcyon_arr ORDER BY id");
+    ASSERT_EQ(back.size(), 5u);
+    EXPECT_EQ(back[0].id, 1);
+    EXPECT_EQ(back[0].name, "a");
+    ASSERT_TRUE(back[0].qty.has_value());
+    EXPECT_EQ(*back[0].qty, 10);
+    EXPECT_EQ(back[1].id, 2);
+    EXPECT_EQ(back[1].name, "b");
+    EXPECT_FALSE(back[1].qty.has_value());
+    EXPECT_EQ(back[2].id, 3);
+    EXPECT_EQ(back[2].name, "c");
+    ASSERT_TRUE(back[2].qty.has_value());
+    EXPECT_EQ(*back[2].qty, 30);
+    EXPECT_EQ(back[4].id, 5);
+    EXPECT_EQ(back[4].name, "e");
+    EXPECT_FALSE(back[4].qty.has_value());
+
     h.execute("DROP TABLE halcyon_arr");
 }
 
