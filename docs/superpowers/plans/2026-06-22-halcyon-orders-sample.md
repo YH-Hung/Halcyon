@@ -153,7 +153,7 @@ echo "==> done"
 Run: `chmod +x samples/orders/load_sql.sh`
 Expected: no output, exit 0.
 
-- [ ] **Step 3: Bring up Db2 and load (red→green: tables must end up populated)**
+- [x] **Step 3: Bring up Db2 and load (red→green: tables must end up populated)**
 
 Run:
 ```bash
@@ -166,7 +166,7 @@ Expected: `load_sql.sh` prints `loading schema.sql`, `loading seed.sql`, `done`;
 the `DROP` lines may print `SQL0204N` on first run (harmless); the `INSERT`s
 report `DB20000I` / number of rows.
 
-- [ ] **Step 4: Verify the data landed**
+- [x] **Step 4: Verify the data landed**
 
 Run:
 ```bash
@@ -265,7 +265,7 @@ int main() {
 }
 ```
 
-- [ ] **Step 4: Configure and build (red→green: must compile and link)**
+- [x] **Step 4: Configure and build (red→green: must compile and link)**
 
 Run:
 ```bash
@@ -277,7 +277,7 @@ cmake --build "${SAMPLE_DIR}/build" -j
 Expected: configures (finds Halcyon + DB2CLI), builds `orders_oo` and
 `orders_functional` with no errors.
 
-- [ ] **Step 5: Run the connectivity smoke against live Db2**
+- [x] **Step 5: Run the connectivity smoke against live Db2**
 
 Run: `"${SAMPLE_DIR}/build/orders_oo"`
 Expected: `connected, value=1` and exit 0. (Db2 from Task 2 must be up.)
@@ -373,7 +373,7 @@ inline void printOrder(const Order& o) {
 }
 ```
 
-- [ ] **Step 2: Verify it compiles by including it from the smoke binary**
+- [x] **Step 2: Verify it compiles by including it from the smoke binary**
 
 Temporarily add `#include "orders_model.hpp"` at the top of the current
 `orders_oo.cpp` smoke file, then rebuild:
@@ -481,12 +481,12 @@ int main() {
 }
 ```
 
-- [ ] **Step 2: Build (red→green: must compile)**
+- [x] **Step 2: Build (red→green: must compile)**
 
 Run: `cmake --build "${SAMPLE_DIR}/build" --target orders_oo -j`
 Expected: compiles and links with no errors.
 
-- [ ] **Step 3: Run against live Db2 and verify output**
+- [x] **Step 3: Run against live Db2 and verify output**
 
 Run: `"${SAMPLE_DIR}/build/orders_oo"`
 Expected: exit 0; output shows `== Connected ==`, three customers (Linus shows
@@ -495,7 +495,7 @@ Expected: exit 0; output shows `== Connected ==`, three customers (Linus shows
 The `order_ts` prints in Db2's timestamp text form (e.g.
 `2026-06-22-09.30.00.000000`).
 
-- [ ] **Step 4: Verify rerunnability**
+- [x] **Step 4: Verify rerunnability**
 
 Run: `"${SAMPLE_DIR}/build/orders_oo"` a second time.
 Expected: identical output, exit 0 (the `kResetDemoRows` delete makes the
@@ -610,12 +610,12 @@ int main() {
 }
 ```
 
-- [ ] **Step 2: Build (red→green: must compile)**
+- [x] **Step 2: Build (red→green: must compile)**
 
 Run: `cmake --build "${SAMPLE_DIR}/build" --target orders_functional -j`
 Expected: compiles and links with no errors.
 
-- [ ] **Step 3: Run and verify identical output to the OO binary**
+- [x] **Step 3: Run and verify identical output to the OO binary**
 
 Run:
 ```bash
@@ -757,7 +757,7 @@ docker compose -f ../../docker/docker-compose.yml down
 ```
 ````
 
-- [ ] **Step 2: Sanity-check the documented commands against the live run**
+- [x] **Step 2: Sanity-check the documented commands against the live run**
 
 Confirm the expected-output block matches what Tasks 5–6 actually printed
 (customer rows, counts, final `ORD-2001 SHIPPED $129.99`). Adjust the README's
@@ -812,7 +812,7 @@ git commit -m "docs: reference orders sample in repo layout"
 
 This is the AGENTS.md verification gate: a clean, live run of the whole flow.
 
-- [ ] **Step 1: Clean rebuild of the sample**
+- [x] **Step 1: Clean rebuild of the sample**
 
 Run:
 ```bash
@@ -824,7 +824,7 @@ cmake --build "${SAMPLE_DIR}/build" -j
 ```
 Expected: clean configure + build, no warnings-as-errors failures.
 
-- [ ] **Step 2: Fresh schema/seed load**
+- [x] **Step 2: Fresh schema/seed load**
 
 Run:
 ```bash
@@ -835,7 +835,7 @@ docker compose -f docker/docker-compose.yml ps   # healthy
 Expected: `done`; `customers`=3, `orders`=4 (re-verify with the Task 2 Step 4
 count query if desired).
 
-- [ ] **Step 3: Run both binaries and confirm identical, correct output**
+- [x] **Step 3: Run both binaries and confirm identical, correct output**
 
 Run:
 ```bash
@@ -847,7 +847,7 @@ diff /tmp/oo.out /tmp/func.out && echo "IDENTICAL"
 Expected: both exit 0, transcript matches the README's expected output, and
 `diff` reports `IDENTICAL`.
 
-- [ ] **Step 4: Confirm rerunnability and tear down**
+- [x] **Step 4: Confirm rerunnability and tear down**
 
 Run:
 ```bash
@@ -857,7 +857,7 @@ docker compose -f docker/docker-compose.yml down
 Expected: `RERUN OK` (second run succeeds with no duplicate-key error), then the
 container stops.
 
-- [ ] **Step 5: Final commit (if any README transcript tweaks were needed)**
+- [x] **Step 5: Final commit (if any README transcript tweaks were needed)**
 
 ```bash
 git add -A samples/orders
