@@ -180,6 +180,23 @@ jobs:
           HALCYON_TEST_DSN: DATABASE=SAMPLE;HOSTNAME=localhost;PORT=50000;UID=db2inst1;PWD=halcyon;
         run: ctest --test-dir build -L integration --output-on-failure
 
+      # Downstream consumer sample: install Halcyon, build the sample against the
+      # install prefix via find_package(Halcyon), then run both walkthroughs
+      # against the live Db2 (mirrors samples/orders/README.md). Catches
+      # consumer-facing API/packaging drift that the in-tree tests cannot.
+      - name: Orders sample (install + build + run)
+        env:
+          HALCYON_TEST_DSN: DATABASE=SAMPLE;HOSTNAME=localhost;PORT=50000;UID=db2inst1;PWD=halcyon;
+        run: |
+          cmake --install build --prefix "$PWD/.halcyon-prefix"
+          (cd samples/orders && ./load_sql.sh)
+          cmake -S samples/orders -B samples/orders/build -G Ninja \
+            -DCMAKE_PREFIX_PATH="$PWD/.halcyon-prefix" \
+            -DDB2_CLIDRIVER_ROOT="$PWD/third_party/clidriver"
+          cmake --build samples/orders/build -j
+          ./samples/orders/build/orders_oo
+          ./samples/orders/build/orders_functional
+
       - name: Db2 logs (on failure)
         if: failure()
         run: docker compose -f docker/docker-compose.yml logs --no-color
