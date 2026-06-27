@@ -31,3 +31,9 @@ target_include_directories(halcyon_stress
     PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
 target_compile_options(halcyon_stress PRIVATE -Wall -Wextra)
 halcyon_apply_sanitizer(halcyon_stress)
+
+# ---- Front-end #3: batch-insert throughput benchmark (standalone; live Db2) ----
+add_executable(halcyon_batch_insert_bench perf/batch_insert_bench.cpp)
+target_link_libraries(halcyon_batch_insert_bench PRIVATE halcyon::halcyon)
+target_compile_options(halcyon_batch_insert_bench PRIVATE -Wall -Wextra)
+halcyon_apply_sanitizer(halcyon_batch_insert_bench)
