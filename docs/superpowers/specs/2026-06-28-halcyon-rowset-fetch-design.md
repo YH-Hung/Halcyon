@@ -350,7 +350,29 @@ with superpowers:systematic-debugging before claiming done.
 
 ### Results
 
-_To be filled in during the live-runs phase._
+Measured **2026-06-29** with `tests/stress/perf/select_bench.cpp` (wired in
+`tests/stress/CMakeLists.txt` — the perf sources live under `perf/` but the
+targets are declared in the stress `CMakeLists.txt`, matching
+`batch_insert_bench`). N = 200,000 rows materialized via `queryAs`, against the
+Dockerized `icr.io/db2_community/db2:11.5.9.0` on Apple silicon under amd64
+emulation:
+
+| Row shape            | Time (200k rows) | Throughput      |
+|----------------------|------------------|-----------------|
+| narrow (2 cols)      | 0.090 s          | ~2,214,000 rows/s |
+| wide (8 cols)        | 0.190 s          | ~1,054,000 rows/s |
+
+**Takeaway:** block fetch sustains ~1–2M rows/s. The retired row-at-a-time path
+issued, per row, one `SQLFetch` plus a `SQLDescribeCol`+`SQLGetData` for **every
+cell** (≈ `rows × cols × 2` CLI calls, and a server round-trip's worth of work
+per row); block fetch collapses that to one `SQLBindCol` per column per block and
+one `SQLFetch` per block, and describes each column once. The saving therefore
+scales with both row count and column width — visible here as the wide shape
+costing ~2× the narrow shape rather than ~4× (its per-row overhead is amortized
+across the block, not paid per cell). A rigorous A/B against the retired path was
+not re-run as a paired binary (the old read seam no longer exists on this
+branch); the figures above are the block-fetch path and the comparison is the
+CLI-call-count analysis in §7.
 
 ## 9. Documentation impact
 
