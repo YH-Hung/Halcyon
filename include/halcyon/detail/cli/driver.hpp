@@ -79,6 +79,13 @@ public:
     // Reads the current row's 0-based column as a neutral Value.
     virtual Result<Value> getColumn(StatementHandle stmt, std::size_t index) = 0;
 
+    // Fetches up to maxRows rows from the open cursor as a row-major block of
+    // neutral Values. Returns 1..maxRows rows on success; a short block does NOT
+    // signal end. Returns an empty block exactly when the cursor is exhausted.
+    // Returns a classified Error on a driver failure (e.g. mid-stream drop).
+    virtual Result<std::vector<std::vector<Value>>> fetchBlock(
+        StatementHandle stmt, std::size_t maxRows) = 0;
+
     // Releases a statement handle. Idempotent for already-finalized handles.
     virtual Result<void> finalize(StatementHandle stmt) = 0;
 

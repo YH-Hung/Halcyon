@@ -438,64 +438,37 @@ public:
     Result<bool> fetch(StatementHandle stmt) override {
         StmtState* st = stmt_state(stmt);
         if (!st) return unknown_stmt();
-        SQLRETURN rc = SQLFetch(st->handle);
-        if (rc == SQL_NO_DATA) return false;
-        if (!cli_ok(rc))
-            return make_error(SQL_HANDLE_STMT, st->handle, ErrorCode::Unknown,
-                              "SQLFetch failed");
-        return true;
+        return fetch_row(st->handle);
     }
 
     Result<Value> getColumn(StatementHandle stmt, std::size_t index) override {
         StmtState* st = stmt_state(stmt);
         if (!st) return unknown_stmt();
-        SQLHSTMT h = st->handle;
-        SQLUSMALLINT col = static_cast<SQLUSMALLINT>(index + 1);
-        SQLCHAR name[1] = {0};
-        SQLSMALLINT nameLen = 0, sqlType = 0, nullable = 0;
-        SQLULEN colSize = 0;
-        SQLSMALLINT scale = 0;
-        if (!cli_ok(SQLDescribeCol(h, col, name, sizeof(name), &nameLen,
-                                   &sqlType, &colSize, &scale, &nullable)))
-            return make_error(SQL_HANDLE_STMT, h, ErrorCode::Unknown,
-                              "SQLDescribeCol failed");
+        return read_column(st->handle, index);
+    }
 
-        switch (sqlType) {
-            case SQL_SMALLINT:
-            case SQL_INTEGER:
-            case SQL_BIGINT: {
-                SQLBIGINT v = 0;
-                SQLLEN ind = 0;
-                if (!cli_ok(SQLGetData(h, col, SQL_C_SBIGINT, &v, sizeof(v),
-                                       &ind)))
-                    return make_error(SQL_HANDLE_STMT, h, ErrorCode::Unknown,
-                                      "SQLGetData int failed");
-                if (ind == SQL_NULL_DATA) return Value{Null{}};
-                return Value{static_cast<std::int64_t>(v)};
+    Result<std::vector<std::vector<Value>>> fetchBlock(
+        StatementHandle stmt, std::size_t maxRows) override {
+        StmtState* st = stmt_state(stmt);
+        if (!st) return unknown_stmt();
+        auto cc = columnCount(stmt);
+        if (!cc.ok()) return cc.error();
+        const std::size_t ncols = cc.value();
+        std::vector<std::vector<Value>> out;
+        while (out.size() < maxRows) {
+            auto f = fetch_row(st->handle);
+            if (!f.ok()) return f.error();
+            if (!f.value()) break;  // clean end of cursor
+            std::vector<Value> row;
+            row.reserve(ncols);
+            for (std::size_t c = 0; c < ncols; ++c) {
+                auto v = read_column(st->handle, c);
+                if (!v.ok()) return v.error();
+                row.push_back(std::move(v.value()));
             }
-            case SQL_REAL:
-            case SQL_FLOAT:
-            case SQL_DOUBLE: {
-                double v = 0;
-                SQLLEN ind = 0;
-                if (!cli_ok(SQLGetData(h, col, SQL_C_DOUBLE, &v, sizeof(v),
-                                       &ind)))
-                    return make_error(SQL_HANDLE_STMT, h, ErrorCode::Unknown,
-                                      "SQLGetData double failed");
-                if (ind == SQL_NULL_DATA) return Value{Null{}};
-                return Value{v};
-            }
-            case SQL_BINARY:
-            case SQL_VARBINARY:
-            case SQL_LONGVARBINARY:
-            case SQL_BLOB:
-                // Raw bytes: read as SQL_C_BINARY so embedded NULs survive
-                // (a SQL_C_CHAR read would truncate at the first 0x00).
-                return get_binary(h, col);
-            default:
-                // CHAR/VARCHAR/DECIMAL/NUMERIC/TIMESTAMP/DATE/TIME → UTF-8 string.
-                return get_string(h, col);
+            out.push_back(std::move(row));
         }
+        return out;
     }
 
     Result<void> finalize(StatementHandle stmt) override {
@@ -562,6 +535,61 @@ private:
         e.code = ErrorCode::Unknown;
         e.message = "unknown statement handle";
         return e;
+    }
+
+    // One-row cursor advance (was the body of fetch()).
+    Result<bool> fetch_row(SQLHSTMT h) {
+        SQLRETURN rc = SQLFetch(h);
+        if (rc == SQL_NO_DATA) return false;
+        if (!cli_ok(rc))
+            return make_error(SQL_HANDLE_STMT, h, ErrorCode::Unknown,
+                              "SQLFetch failed");
+        return true;
+    }
+
+    // Reads the current row's 0-based column as a neutral Value (was the body of
+    // getColumn()). Describes the column per call for now; Task 4 caches it.
+    Result<Value> read_column(SQLHSTMT h, std::size_t index) {
+        SQLUSMALLINT col = static_cast<SQLUSMALLINT>(index + 1);
+        SQLCHAR name[1] = {0};
+        SQLSMALLINT nameLen = 0, sqlType = 0, nullable = 0;
+        SQLULEN colSize = 0;
+        SQLSMALLINT scale = 0;
+        if (!cli_ok(SQLDescribeCol(h, col, name, sizeof(name), &nameLen,
+                                   &sqlType, &colSize, &scale, &nullable)))
+            return make_error(SQL_HANDLE_STMT, h, ErrorCode::Unknown,
+                              "SQLDescribeCol failed");
+        switch (sqlType) {
+            case SQL_SMALLINT:
+            case SQL_INTEGER:
+            case SQL_BIGINT: {
+                SQLBIGINT v = 0;
+                SQLLEN ind = 0;
+                if (!cli_ok(SQLGetData(h, col, SQL_C_SBIGINT, &v, sizeof(v), &ind)))
+                    return make_error(SQL_HANDLE_STMT, h, ErrorCode::Unknown,
+                                      "SQLGetData int failed");
+                if (ind == SQL_NULL_DATA) return Value{Null{}};
+                return Value{static_cast<std::int64_t>(v)};
+            }
+            case SQL_REAL:
+            case SQL_FLOAT:
+            case SQL_DOUBLE: {
+                double v = 0;
+                SQLLEN ind = 0;
+                if (!cli_ok(SQLGetData(h, col, SQL_C_DOUBLE, &v, sizeof(v), &ind)))
+                    return make_error(SQL_HANDLE_STMT, h, ErrorCode::Unknown,
+                                      "SQLGetData double failed");
+                if (ind == SQL_NULL_DATA) return Value{Null{}};
+                return Value{v};
+            }
+            case SQL_BINARY:
+            case SQL_VARBINARY:
+            case SQL_LONGVARBINARY:
+            case SQL_BLOB:
+                return get_binary(h, col);
+            default:
+                return get_string(h, col);
+        }
     }
 
     // Locked lookups: copy a handle / grab a stable StmtState pointer under the

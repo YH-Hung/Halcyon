@@ -119,3 +119,60 @@ TEST(CliSeamStatement, CloseCursorIsCallableAndIdempotent) {
     EXPECT_TRUE(b.ok());
     EXPECT_EQ(driver.closeCursorCalls, 2);
 }
+
+TEST(CliSeamBlock, FetchBlockReturnsAllRowsThenEmpty) {
+    MockCliDriver driver;
+    auto conn = driver.connect(ConnectionParams{"x"}).value();
+    driver.resultSets.push_back(MockCliDriver::ScriptedRows{
+        {"id", "name"},
+        {{Value{std::int64_t{1}}, Value{std::string{"ada"}}},
+         {Value{std::int64_t{2}}, Value{Null{}}}}});
+    auto st = driver.prepare(conn, "SELECT id, name FROM t").value();
+    ASSERT_TRUE(driver.execute(st).ok());
+
+    auto blk = driver.fetchBlock(st, 100);
+    ASSERT_TRUE(blk.ok());
+    ASSERT_EQ(blk.value().size(), 2u);
+    EXPECT_EQ(blk.value()[0][0], Value{std::int64_t{1}});
+    EXPECT_EQ(blk.value()[1][1], Value{Null{}});
+
+    auto end = driver.fetchBlock(st, 100);
+    ASSERT_TRUE(end.ok());
+    EXPECT_TRUE(end.value().empty());  // exhausted -> empty
+}
+
+TEST(CliSeamBlock, FetchBlockHonorsMaxRowsAndResumes) {
+    MockCliDriver driver;
+    auto conn = driver.connect(ConnectionParams{"x"}).value();
+    driver.resultSets.push_back(MockCliDriver::ScriptedRows{
+        {"id"},
+        {{Value{std::int64_t{1}}}, {Value{std::int64_t{2}}}, {Value{std::int64_t{3}}}}});
+    auto st = driver.prepare(conn, "SELECT id FROM t").value();
+    ASSERT_TRUE(driver.execute(st).ok());
+
+    auto a = driver.fetchBlock(st, 2);
+    ASSERT_TRUE(a.ok());
+    ASSERT_EQ(a.value().size(), 2u);  // capped at maxRows
+    auto b = driver.fetchBlock(st, 2);
+    ASSERT_TRUE(b.ok());
+    ASSERT_EQ(b.value().size(), 1u);  // remainder
+    EXPECT_EQ(b.value()[0][0], Value{std::int64_t{3}});
+}
+
+TEST(CliSeamBlock, FetchBlockPropagatesScriptedError) {
+    MockCliDriver driver;
+    auto conn = driver.connect(ConnectionParams{"x"}).value();
+    driver.resultSets.push_back(MockCliDriver::ScriptedRows{
+        {"id"}, {{Value{std::int64_t{1}}}}});
+    Error e;
+    e.code = ErrorCode::Connection;
+    e.message = "drop";
+    driver.fetchBlockError = e;
+    driver.failFetchBlockOnCall = 1;
+    auto st = driver.prepare(conn, "SELECT id FROM t").value();
+    ASSERT_TRUE(driver.execute(st).ok());
+
+    auto blk = driver.fetchBlock(st, 100);
+    ASSERT_FALSE(blk.ok());
+    EXPECT_EQ(blk.error().code, ErrorCode::Connection);
+}

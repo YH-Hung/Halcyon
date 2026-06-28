@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <deque>
@@ -200,6 +201,30 @@ public:
         const auto& row = s.cursor.rows[static_cast<std::size_t>(s.position)];
         if (index >= row.size()) return Result<Value>(rangeError());
         return Result<Value>(row[index]);
+    }
+
+    // --- block fetch scripting ---
+    std::size_t fetchBlockSize = 0;  // 0 => up to maxRows; >0 => cap per call
+    Error fetchBlockError;
+    int failFetchBlockOnCall = 0;  // 1-based fetchBlock() call to fail; 0=never
+    int fetchBlockCalls = 0;
+
+    Result<std::vector<std::vector<Value>>> fetchBlock(
+        StatementHandle stmt, std::size_t maxRows) override {
+        ++fetchBlockCalls;
+        if (failFetchBlockOnCall != 0 && fetchBlockCalls == failFetchBlockOnCall)
+            return Result<std::vector<std::vector<Value>>>(fetchBlockError);
+        auto& s = statements.at(stmt);
+        std::size_t cap = (fetchBlockSize != 0)
+                              ? std::min(maxRows, fetchBlockSize)
+                              : maxRows;
+        std::vector<std::vector<Value>> out;
+        const long n = static_cast<long>(s.cursor.rows.size());
+        while (out.size() < cap && s.position + 1 < n) {
+            ++s.position;
+            out.push_back(s.cursor.rows[static_cast<std::size_t>(s.position)]);
+        }
+        return Result<std::vector<std::vector<Value>>>(std::move(out));
     }
 
     Result<void> finalize(StatementHandle stmt) override {

@@ -167,6 +167,20 @@ public:
         return Result<Value>(Value{encoded_value(it->second.sql)});
     }
 
+    Result<std::vector<std::vector<Value>>> fetchBlock(
+        StatementHandle stmt, std::size_t maxRows) override {
+        (void)maxRows;
+        const std::lock_guard<std::mutex> g(mu_);
+        auto it = stmts_.find(stmt);
+        if (it == stmts_.end()) return mapping<std::vector<std::vector<Value>>>();
+        std::vector<std::vector<Value>> out;
+        if (it->second.position < 0) {  // single row, once
+            it->second.position = 0;
+            out.push_back({Value{encoded_value(it->second.sql)}});
+        }
+        return Result<std::vector<std::vector<Value>>>(std::move(out));
+    }
+
     Result<void> finalize(StatementHandle stmt) override {
         ++finalizeCalls;
         std::lock_guard<std::mutex> lk(mu_);
