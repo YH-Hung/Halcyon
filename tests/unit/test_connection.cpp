@@ -158,13 +158,13 @@ TEST(ConnectionCache, LazyFetchErrorDropsCachedEntry) {
     MockCliDriver driver;
     driver.resultSets.push_back({{"id"}, {{Value{std::int64_t{1}}}}});  // one row
     driver.resultSets.push_back({{"id"}, {}});                          // second query
-    driver.fetchError = [] {
+    driver.fetchBlockError = [] {
         halcyon::Error e;
         e.code = halcyon::ErrorCode::Connection;
         e.message = "lost";
         return e;
     }();
-    driver.failFetchOnCall = 1;  // first fetch() of the lazy cursor fails
+    driver.failFetchBlockOnCall = 1;  // first fetchBlock() of the lazy cursor fails
     auto conn = Connection::open(driver, ConnectionParams{"x"},
                                  /*statementCacheSize=*/8)
                     .value();
@@ -172,7 +172,7 @@ TEST(ConnectionCache, LazyFetchErrorDropsCachedEntry) {
     {
         auto rs = conn.query("SELECT id FROM t");
         ASSERT_TRUE(rs.ok());
-        for (auto& row : rs.value()) { (void)row; }  // iteration hits the fetch error
+        for (auto& row : rs.value()) { (void)row; }  // iteration hits the fetchBlock error
         EXPECT_FALSE(rs.value().ok());               // fetch error recorded
     }  // rs destroyed -> poisoned lease finalizes + drops the cached entry
     {

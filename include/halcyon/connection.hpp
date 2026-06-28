@@ -21,39 +21,34 @@
 
 namespace halcyon {
 
+namespace detail {
+// Rows requested per fetchBlock call; the driver further clamps by its byte
+// budget. Internal tunable, not public API.
+inline constexpr std::size_t kFetchBlockRows = 4096;
+}  // namespace detail
+
 class ResultSet;    // fwd
 class Transaction;  // fwd (defined in transaction.hpp)
 
-// A non-owning view of the current cursor row. Valid only at the iterator's
-// current position (forward-only); reads columns lazily via the seam.
+// A non-owning view of one already-materialized result row (a vector of neutral
+// Values produced by the driver's block fetch). Valid while its owning block is.
 class Row {
 public:
-    // owner is the streaming ResultSet this row belongs to (null for a Row not
-    // backed by one, e.g. map_row's direct reads). When set, a getColumn failure
-    // is recorded on it so a mid-stream connection drop during SQLGetData can be
-    // detected and the connection discarded rather than returned to the pool.
-    Row(detail::cli::ICliDriver& driver, detail::cli::StatementHandle stmt,
-        std::size_t columns, ResultSet* owner = nullptr)
-        : driver_(&driver), stmt_(stmt), columns_(columns), owner_(owner) {}
+    explicit Row(const std::vector<detail::cli::Value>& cells) : cells_(&cells) {}
 
-    std::size_t column_count() const noexcept { return columns_; }
+    std::size_t column_count() const noexcept { return cells_->size(); }
 
-    // Result form: maps the row to a tuple<Ts...>; Mapping error on arity or
-    // type/null mismatch.
     template <class... Ts>
     Result<std::tuple<Ts...>> try_as() const {
         static_assert((is_readable<Ts>::value && ...),
                       "every column type must have a readable TypeBinder");
-        if (sizeof...(Ts) != columns_)
+        if (sizeof...(Ts) != cells_->size())
             return detail::mapping_error("row.as<>: column count mismatch");
         return read_tuple<Ts...>(std::index_sequence_for<Ts...>{});
     }
 
-    // Throwing form (OO style): unwraps try_as via Result::value().
     template <class... Ts>
-    std::tuple<Ts...> as() const {
-        return try_as<Ts...>().value();
-    }
+    std::tuple<Ts...> as() const { return try_as<Ts...>().value(); }
 
 private:
     template <class... Ts, std::size_t... I>
@@ -64,19 +59,8 @@ private:
         auto step = [&](auto idx, auto* slot) {
             if (!ok) return;
             constexpr std::size_t i = decltype(idx)::value;
-            auto cell = driver_->getColumn(stmt_, i);
-            if (!cell.ok()) {
-                ok = false;
-                err = cell.error();
-                // A driver-side read failure (e.g. connection drop during
-                // SQLGetData) is recorded on the owning ResultSet so the cursor's
-                // lease/connection can be discarded — a from_value mapping error
-                // below is client-side and deliberately left untouched.
-                record_read_error(err);
-                return;
-            }
             using F = std::remove_pointer_t<decltype(slot)>;
-            auto v = TypeBinder<F>::from_value(cell.value());
+            auto v = TypeBinder<F>::from_value((*cells_)[i]);
             if (!v.ok()) {
                 ok = false;
                 err = v.error();
@@ -89,14 +73,7 @@ private:
         return out;
     }
 
-    // Records a column-read failure on the owning ResultSet (if any). Defined out
-    // of line below, once ResultSet is complete.
-    void record_read_error(const Error& e) const;
-
-    detail::cli::ICliDriver* driver_;
-    detail::cli::StatementHandle stmt_;
-    std::size_t columns_;
-    ResultSet* owner_ = nullptr;
+    const std::vector<detail::cli::Value>* cells_;
 };
 
 // A prepared, reusable statement. Owns its driver statement handle and finalizes
@@ -172,21 +149,11 @@ public:
     std::size_t column_count() const noexcept { return columns_; }
 
     // The error that ended iteration early, if any. Forward-only iteration stops
-    // when fetch() reports end-of-cursor OR an error; this distinguishes the two
-    // so a mid-stream Db2 error is never silently mistaken for end-of-results.
+    // when fetchBlock() reports end-of-cursor OR an error; this distinguishes the
+    // two so a mid-stream Db2 error is never silently mistaken for end-of-results.
     // Check after a range-for loop: empty == clean end, set == fetch failed.
     const std::optional<Error>& error() const noexcept { return error_; }
     bool ok() const noexcept { return !error_.has_value(); }
-
-    // Records a column-read failure (from Row::try_as) so a mid-stream driver
-    // error during SQLGetData is treated like a fetch failure: the first error is
-    // kept, and the cached statement is poisoned so its lease is finalized +
-    // dropped on release. The facade's QueryResult then discards a connection-
-    // class error's connection instead of returning it to the pool.
-    void note_column_error(const Error& e) {
-        if (!error_) error_ = e;
-        if (lease_) lease_->poison();
-    }
 
     class iterator {
     public:
@@ -196,7 +163,7 @@ public:
         using pointer = const Row*;
         using reference = const Row&;
 
-        iterator() = default;  // end sentinel: at_end_ == true
+        iterator() = default;
         explicit iterator(ResultSet* rs) : rs_(rs), at_end_(false) { advance(); }
 
         const Row& operator*() const { return *row_; }
@@ -210,24 +177,32 @@ public:
 
     private:
         void advance() {
-            auto f = rs_->driver_->fetch(rs_->stmt_);
-            if (!f.ok()) {  // a mid-stream Db2 error ends iteration, recorded
-                rs_->error_ = f.error();
-                // A fetch error on a cached handle may leave it in a bad state;
-                // poison the lease so on release the entry is finalized + dropped
-                // and the next call re-prepares (spec §5). No-op for borrowing
-                // ResultSets, whose lease_ is empty.
-                if (rs_->lease_) rs_->lease_->poison();
-                at_end_ = true;
-                row_.reset();
-                return;
+            if (rs_->pos_ >= rs_->block_.size()) {
+                if (rs_->exhausted_) {
+                    at_end_ = true;
+                    row_.reset();
+                    return;
+                }
+                auto blk = rs_->driver_->fetchBlock(rs_->stmt_,
+                                                    detail::kFetchBlockRows);
+                if (!blk.ok()) {
+                    rs_->error_ = blk.error();
+                    if (rs_->lease_) rs_->lease_->poison();
+                    rs_->exhausted_ = true;
+                    at_end_ = true;
+                    row_.reset();
+                    return;
+                }
+                if (blk.value().empty()) {
+                    rs_->exhausted_ = true;
+                    at_end_ = true;
+                    row_.reset();
+                    return;
+                }
+                rs_->block_ = std::move(blk.value());
+                rs_->pos_ = 0;
             }
-            if (!f.value()) {  // clean end of cursor
-                at_end_ = true;
-                row_.reset();
-                return;
-            }
-            row_.emplace(*rs_->driver_, rs_->stmt_, rs_->columns_, rs_);
+            row_.emplace(rs_->block_[rs_->pos_++]);
         }
         ResultSet* rs_ = nullptr;
         bool at_end_ = true;
@@ -242,20 +217,16 @@ private:
               std::size_t columns)
         : driver_(driver), stmt_(stmt), columns_(columns) {}
 
-    friend class Connection;  // for the owning-ResultSet constructor
-    friend class Row;         // for note_column_error via Row::record_read_error
+    friend class Connection;  // owning-ResultSet construction (run_query)
     detail::cli::ICliDriver* driver_;
     detail::cli::StatementHandle stmt_;
     std::size_t columns_;
-    std::optional<Error> error_;                   // set if a fetch failed mid-iteration
-    std::optional<detail::StatementLease> lease_;  // owns the cached/transient stmt
+    std::vector<std::vector<detail::cli::Value>> block_;
+    std::size_t pos_ = 0;
+    bool exhausted_ = false;
+    std::optional<Error> error_;
+    std::optional<detail::StatementLease> lease_;
 };
-
-// Out-of-line now that ResultSet is complete: forward a column-read failure to
-// the owning streaming ResultSet (no-op for a Row without one).
-inline void Row::record_read_error(const Error& e) const {
-    if (owner_) owner_->note_column_error(e);
-}
 
 // Out-of-line definition now that ResultSet is complete.
 template <class... Args>
@@ -420,25 +391,19 @@ private:
             lease.poison();
             return e.error();
         }
-        auto cc = driver_->columnCount(lease.handle());
-        if (!cc.ok()) {
-            lease.poison();
-            return cc.error();
-        }
         std::vector<T> out;
         for (;;) {
-            auto f = driver_->fetch(lease.handle());
-            if (!f.ok()) {
+            auto blk = driver_->fetchBlock(lease.handle(), detail::kFetchBlockRows);
+            if (!blk.ok()) {
                 lease.poison();
-                return f.error();
+                return blk.error();
             }
-            if (!f.value()) break;
-            auto row = reflect::map_row<T>(*driver_, lease.handle(), cc.value());
-            if (!row.ok()) {
-                lease.poison();
-                return row.error();
+            if (blk.value().empty()) break;  // clean end
+            for (auto& cells : blk.value()) {
+                auto row = reflect::map_row<T>(cells);
+                if (!row.ok()) return row.error();  // client-side mapping error
+                out.push_back(std::move(row.value()));
             }
-            out.push_back(std::move(row.value()));
         }
         return out;
     }

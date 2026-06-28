@@ -410,8 +410,7 @@ struct Reflected : std::false_type {
 // Assigns each column (by position) into the struct via its member pointers.
 template <class T, class Tuple, std::size_t... I>
 Result<void> assign_fields(T& out, const Tuple& mptrs,
-                           detail::cli::ICliDriver& driver,
-                           detail::cli::StatementHandle stmt,
+                           const std::vector<detail::cli::Value>& cells,
                            std::index_sequence<I...>) {
     Error err;
     bool ok = true;
@@ -420,13 +419,7 @@ Result<void> assign_fields(T& out, const Tuple& mptrs,
         constexpr std::size_t i = decltype(idx)::value;
         auto mp = std::get<i>(mptrs);
         using F = std::remove_reference_t<decltype(out.*mp)>;
-        auto cell = driver.getColumn(stmt, i);
-        if (!cell.ok()) {
-            ok = false;
-            err = cell.error();
-            return;
-        }
-        auto v = TypeBinder<F>::from_value(cell.value());
+        auto v = TypeBinder<F>::from_value(cells[i]);
         if (!v.ok()) {
             ok = false;
             err = v.error();
@@ -439,18 +432,17 @@ Result<void> assign_fields(T& out, const Tuple& mptrs,
     return Result<void>();
 }
 
-// Maps the current cursor row into a freshly value-initialized T.
+// Maps an already-materialized row into a freshly value-initialized T.
 template <class T>
-Result<T> map_row(detail::cli::ICliDriver& driver,
-                  detail::cli::StatementHandle stmt, std::size_t columns) {
+Result<T> map_row(const std::vector<detail::cli::Value>& cells) {
     static_assert(Reflected<T>::value,
                   "queryAs<T> requires HALCYON_REFLECT(T, fields...)");
     constexpr std::size_t N = Reflected<T>::field_count;
-    if (columns != N)
+    if (cells.size() != N)
         return detail::mapping_error("queryAs<T>: column count != field count");
     auto mptrs = Reflected<T>::members();
     T out{};
-    auto r = assign_fields(out, mptrs, driver, stmt, std::make_index_sequence<N>{});
+    auto r = assign_fields(out, mptrs, cells, std::make_index_sequence<N>{});
     if (!r.ok()) return r.error();
     return out;
 }

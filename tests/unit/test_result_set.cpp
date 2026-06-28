@@ -62,12 +62,13 @@ TEST(ResultSetTest, MidStreamFetchErrorIsSurfacedNotSilentlyDropped) {
     MockCliDriver driver;
     auto conn = driver.connect({"x"}).value();
     driver.resultSets.push_back(usersGrid());  // 2 rows available
+    driver.fetchBlockSize = 1;                 // one row per block
     halcyon::Error e;
     e.code = halcyon::ErrorCode::Connection;
     e.message = "boom";
     e.retriable = true;
-    driver.fetchError = e;
-    driver.failFetchOnCall = 2;  // first row fetches OK; second fetch errors
+    driver.fetchBlockError = e;
+    driver.failFetchBlockOnCall = 2;  // block 1 (row 0) ok; block 2 errors
     auto stmt = driver.prepare(conn, "SELECT id, name FROM u").value();
     ASSERT_TRUE(driver.execute(stmt).ok());
 
@@ -77,12 +78,28 @@ TEST(ResultSetTest, MidStreamFetchErrorIsSurfacedNotSilentlyDropped) {
         (void)row;
         ++rows;
     }
-    EXPECT_EQ(rows, 1);  // only the first row arrives before the error
-    // The mid-stream error must be reported, not collapsed into end-of-cursor.
+    EXPECT_EQ(rows, 1);
     ASSERT_FALSE(rs.ok());
     ASSERT_TRUE(rs.error().has_value());
     EXPECT_EQ(rs.error()->code, halcyon::ErrorCode::Connection);
     EXPECT_EQ(rs.error()->message, "boom");
+}
+
+TEST(ResultSetTest, RowsSpanMultipleBlocks) {
+    MockCliDriver driver;
+    auto conn = driver.connect({"x"}).value();
+    driver.resultSets.push_back(MockCliDriver::ScriptedRows{
+        {"id"},
+        {{Value{std::int64_t{1}}}, {Value{std::int64_t{2}}}, {Value{std::int64_t{3}}}, {Value{std::int64_t{4}}}}});
+    driver.fetchBlockSize = 2;  // forces >= 2 blocks for 4 rows
+    auto stmt = driver.prepare(conn, "SELECT id FROM u").value();
+    ASSERT_TRUE(driver.execute(stmt).ok());
+    auto rs = ResultSet::create_borrowing(driver, stmt).value();
+
+    std::vector<int> got;
+    for (auto& row : rs) got.push_back(std::get<0>(row.as<int>()));
+    EXPECT_EQ(got, (std::vector<int>{1, 2, 3, 4}));
+    EXPECT_TRUE(rs.ok());
 }
 
 TEST(ResultSetTest, CleanIterationLeavesNoError) {
