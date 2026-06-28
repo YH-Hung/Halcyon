@@ -13,6 +13,7 @@ A modern **C++17** client library for **IBM Db2**, built on the IBM Db2 CLI (`sq
 - **Async** — `std::future`-based `queryAsync`/`executeAsync`; coroutine-ready for a future C++20 layer
 - **RAII transactions** — guard and functional `transaction(...)` helper
 - **Bulk/batch insert** — `executeBatch` uses Db2 CLI array binding: rows are bound column-wise and sent in one execute per chunk, returning the total affected-row count
+- **Block fetch** — reads use Db2 CLI rowset (block) binding (the read-side mirror of array binding): columns are bound once and a block of rows arrives per round-trip; result sets with a LOB/long column transparently fall back to row-at-a-time
 - **Optional observability** — Prometheus metrics and OpenTelemetry tracing, zero overhead when disabled
 - **Mockable seam** — `ICliDriver` interface keeps all IBM CLI details behind a single boundary; unit tests need no live database
 

@@ -202,3 +202,13 @@ bool safe = halcyon::detail::is_read_only("SELECT id FROM users WHERE id = ?");
 bool safe2 = halcyon::detail::is_read_only("WITH w AS (SELECT 1) UPDATE t SET x=1");
 // false
 ```
+
+## Fetch block tuning (internal)
+
+Reads use Db2 CLI rowset (block) fetch under the hood. The driver sizes each block
+from a fixed internal byte budget (~2 MiB) and a row cap, and treats any column
+wider than a fixed threshold (~64 KiB) — or a `CLOB`/`BLOB`/`LONG VARCHAR` — as
+"long", routing that statement to a row-at-a-time fallback that still reads the
+data correctly. These are internal constants, not public API; they mirror the
+write path's array-binding byte budget. There is intentionally no knob to tune them
+in this release.
