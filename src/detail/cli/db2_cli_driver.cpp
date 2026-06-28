@@ -1,6 +1,7 @@
 #include <sqlcli1.h>
 #include <sqlext.h>
 
+#include <algorithm>
 #include <cstddef>
 #include <cstring>
 #include <map>
@@ -233,6 +234,10 @@ public:
         const std::vector<std::vector<Value>>& rows) override {
         StmtState* stp = stmt_state(stmt);
         if (!stp) return unknown_stmt();
+        // Re-binding for a batch execute invalidates any cached column describe
+        // from a prior result-set use of this (cached) statement handle.
+        stp->cols.reset();
+        stp->blockFallback = false;
         SQLHSTMT h = stp->handle;
         const std::size_t nRows = rows.size();
         if (nRows == 0) return std::int64_t{0};
@@ -608,6 +613,19 @@ private:
                                   "SQLDescribeCol failed");
             ColMeta m;
             m.sqlType = sqlType;
+            // SQLDescribeCol's colSize is the declared length in *units*; for a
+            // CODEUNITS32 / multi-byte character column that is fewer than the
+            // byte length, so binding a colSize-sized buffer would let the server
+            // truncate a wide value while the indicator still reports its full
+            // byte length -> a buffer over-read in the transpose. SQL_DESC_
+            // OCTET_LENGTH gives the byte length; bind to the larger of the two.
+            // Text-rendered types (DECIMAL/DATE/TIME/TIMESTAMP) report a small
+            // octet length, so colSize (display width) governs there.
+            SQLLEN octet = 0;
+            SQLColAttribute(h, static_cast<SQLUSMALLINT>(c + 1),
+                            SQL_DESC_OCTET_LENGTH, nullptr, 0, nullptr, &octet);
+            const SQLLEN dataWidth =
+                std::max<SQLLEN>(static_cast<SQLLEN>(colSize), octet);
             switch (sqlType) {
                 case SQL_SMALLINT:
                 case SQL_INTEGER:
@@ -628,7 +646,7 @@ private:
                 case SQL_BINARY:
                 case SQL_VARBINARY:
                     m.cType = SQL_C_BINARY;
-                    m.bindWidth = static_cast<SQLLEN>(colSize);
+                    m.bindWidth = dataWidth;
                     break;
                 case SQL_LONGVARBINARY:
                 case SQL_BLOB:
@@ -639,7 +657,7 @@ private:
                     break;
                 default:  // CHAR/VARCHAR/DECIMAL/NUMERIC/DATE/TIME/TIMESTAMP -> text
                     m.cType = SQL_C_CHAR;
-                    m.bindWidth = static_cast<SQLLEN>(colSize) + 1;  // +1 for NUL
+                    m.bindWidth = dataWidth + 1;  // +1 for NUL
                     break;
             }
             if (m.bounded &&
@@ -741,6 +759,9 @@ private:
             }
         }
 
+        // A partial final block can arrive as SQL_NO_DATA with rowsFetched>0;
+        // only rowsFetched==0 is true end-of-cursor. Rows fetched in a partial
+        // block fall through to the transpose below.
         SQLRETURN rc = SQLFetch(h);
         if (rc == SQL_NO_DATA && rowsFetched == 0) {
             reset_rowset(h);
@@ -784,16 +805,27 @@ private:
                         row.push_back(
                             Value{static_cast<std::int64_t>(*slot ? 1 : 0)});
                         break;
-                    case SQL_C_BINARY:
+                    case SQL_C_BINARY: {
+                        // Clamp to the bound width: a server that truncated the
+                        // value still reports its full byte length in li, so an
+                        // unclamped copy would over-read the buffer.
+                        const std::size_t n = std::min<std::size_t>(
+                            static_cast<std::size_t>(li),
+                            static_cast<std::size_t>(cols[c].bindWidth));
                         row.push_back(Value{std::vector<std::byte>(
                             reinterpret_cast<const std::byte*>(slot),
-                            reinterpret_cast<const std::byte*>(slot) +
-                                static_cast<std::size_t>(li))});
+                            reinterpret_cast<const std::byte*>(slot) + n)});
                         break;
-                    default:  // SQL_C_CHAR text (string/decimal/date/time/ts)
-                        row.push_back(Value{
-                            std::string(slot, static_cast<std::size_t>(li))});
+                    }
+                    default: {  // SQL_C_CHAR text (string/decimal/date/time/ts)
+                        // Clamp to the data capacity (bindWidth-1, excluding the
+                        // NUL) for the same over-read reason as the binary case.
+                        const std::size_t n = std::min<std::size_t>(
+                            static_cast<std::size_t>(li),
+                            static_cast<std::size_t>(cols[c].bindWidth) - 1);
+                        row.push_back(Value{std::string(slot, n)});
                         break;
+                    }
                 }
             }
             out.push_back(std::move(row));

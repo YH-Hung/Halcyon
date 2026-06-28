@@ -477,9 +477,14 @@ struct RowsetRow {
 struct CountRow {
     std::int64_t c;
 };
+struct U32Row {
+    std::int64_t id;
+    std::string s;
+};
 }  // namespace
 HALCYON_REFLECT(RowsetRow, id, name, qty);
 HALCYON_REFLECT(CountRow, c);
+HALCYON_REFLECT(U32Row, id, s);
 
 TEST(Db2RowsetFetch, MultiBlockSelectPreservesOrderValuesAndNulls) {
     auto d = dsn();
@@ -589,4 +594,34 @@ TEST(Db2RowsetFetch, AllScalarTypesRoundTripThroughBlock) {
     }
     EXPECT_EQ(seen, 1);
     h.execute("DROP TABLE halcyon_types");
+}
+
+TEST(Db2RowsetFetch, MultiByteUtf8ValueRoundTripsThroughBlock) {
+    auto d = dsn();
+    if (!d) GTEST_SKIP() << "HALCYON_TEST_DSN not set; skipping live Db2 test";
+    auto dbh = halcyon::Database::open(*d);
+    ASSERT_TRUE(dbh.ok()) << dbh.error().message;
+    auto& h = dbh.value();
+    h.execute("DROP TABLE halcyon_u32");
+    // A multi-byte UTF-8 value whose byte length exceeds its character count must
+    // round-trip through the rowset path whole. The driver sizes the bind buffer
+    // by octet (byte) length — not the character-count colSize — and the transpose
+    // clamps the copy to the buffer, so a wide value is never truncated and a
+    // server that truncated could never drive a buffer over-read.
+    ASSERT_TRUE(
+        h.execute("CREATE TABLE halcyon_u32(id BIGINT NOT NULL, s VARCHAR(64))")
+            .ok());
+    const std::string multi =  // 8 x U+00E9 (é), 2 bytes each = 16 bytes
+        "\xC3\xA9\xC3\xA9\xC3\xA9\xC3\xA9\xC3\xA9\xC3\xA9\xC3\xA9\xC3\xA9";
+    ASSERT_EQ(multi.size(), 16u);
+    ASSERT_TRUE(h.execute("INSERT INTO halcyon_u32(id, s) VALUES (?, ?)",
+                          std::int64_t{1}, multi)
+                    .ok());
+
+    // queryAs -> all columns bounded -> rowset path.
+    auto rows = h.queryAsOrThrow<U32Row>("SELECT id, s FROM halcyon_u32");
+    ASSERT_EQ(rows.size(), 1u);
+    EXPECT_EQ(rows[0].s.size(), 16u);
+    EXPECT_EQ(rows[0].s, multi);
+    h.execute("DROP TABLE halcyon_u32");
 }

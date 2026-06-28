@@ -153,7 +153,7 @@ public:
     Result<std::vector<std::vector<Value>>> fetchBlock(
         StatementHandle stmt, std::size_t maxRows) override {
         (void)maxRows;
-        const std::lock_guard<std::mutex> g(mu_);
+        std::lock_guard<std::mutex> lk(mu_);
         auto it = stmts_.find(stmt);
         if (it == stmts_.end()) return mapping<std::vector<std::vector<Value>>>();
         std::vector<std::vector<Value>> out;

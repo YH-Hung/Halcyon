@@ -401,7 +401,10 @@ private:
             if (blk.value().empty()) break;  // clean end
             for (auto& cells : blk.value()) {
                 auto row = reflect::map_row<T>(cells);
-                if (!row.ok()) return row.error();  // client-side mapping error
+                // A mapping failure is client-side (the driver already produced
+                // the Values), so the lease is deliberately NOT poisoned here —
+                // only a fetchBlock driver error (above) discards the connection.
+                if (!row.ok()) return row.error();
                 out.push_back(std::move(row.value()));
             }
         }
