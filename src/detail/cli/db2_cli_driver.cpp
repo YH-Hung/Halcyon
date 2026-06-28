@@ -435,18 +435,6 @@ public:
                            static_cast<std::size_t>(nameLen));
     }
 
-    Result<bool> fetch(StatementHandle stmt) override {
-        StmtState* st = stmt_state(stmt);
-        if (!st) return unknown_stmt();
-        return fetch_row(st->handle);
-    }
-
-    Result<Value> getColumn(StatementHandle stmt, std::size_t index) override {
-        StmtState* st = stmt_state(stmt);
-        if (!st) return unknown_stmt();
-        return read_column(st->handle, index);
-    }
-
     Result<std::vector<std::vector<Value>>> fetchBlock(
         StatementHandle stmt, std::size_t maxRows) override {
         StmtState* st = stmt_state(stmt);
