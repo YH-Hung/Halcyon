@@ -22,6 +22,11 @@ namespace halcyon {
 
 using Clock = std::chrono::steady_clock;
 
+/// \brief Configuration for a `ConnectionPool` (sizing, timeouts, observability).
+///
+/// Pass to `Database::open` or `ConnectionPool::create`. All fields have
+/// reasonable defaults: 1–8 connections, 5 s acquire timeout, 60 s idle
+/// timeout, 30 min max lifetime, no observability.
 struct PoolConfig {
     std::size_t min = 1;
     std::size_t max = 8;
@@ -93,9 +98,11 @@ private:
     bool broken_ = false;
 };
 
-// Thread-safe connection pool: lazy growth min→max, blocking acquire with
-// timeout, transparent reconnect, and a background reaper. Created via create();
-// non-copyable and non-movable (owns a mutex + maintenance thread).
+/// \brief Thread-safe connection pool with lazy growth, blocking acquire, and transparent reconnect.
+///
+/// Created via `ConnectionPool::create`; non-copyable, non-movable (owns a mutex
+/// and maintenance thread). `Database` manages one internally — prefer `Database`
+/// for application code.
 class ConnectionPool {
 public:
     static Result<std::unique_ptr<ConnectionPool>> create(

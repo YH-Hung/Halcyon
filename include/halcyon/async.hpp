@@ -17,8 +17,11 @@
 
 namespace halcyon {
 
-// Fixed-size thread pool with a single submit() chokepoint. A future coroutine
-// task<T>/awaitable layer can wrap submit() without changing this API.
+/// \brief Fixed-size thread pool backing `Database::executeAsync` / `queryAsync`.
+///
+/// Submit any callable via `submit(fn)` — returns a `std::future<ReturnType>`.
+/// A future coroutine `task<T>`/awaitable layer can wrap `submit()` without
+/// changing this API. Drains in-flight tasks on destruction.
 class Executor {
 public:
     explicit Executor(std::size_t threads) {
@@ -79,8 +82,10 @@ private:
     bool stop_ = false;
 };
 
-// Acquires a pooled connection on a worker thread and runs fn(Connection&). fn
-// must return a Result<T>; an acquire failure short-circuits to that error.
+/// \brief Async helper: acquires a pooled connection on a worker thread and runs `fn(Connection&)`.
+///
+/// `fn` must return `Result<T>`; an acquire failure short-circuits to that error.
+/// Returns `std::future<Result<T>>`.
 template <class Fn>
 auto async_with_connection(Executor& ex, ConnectionPool& pool, Fn fn)
     -> std::future<std::decay_t<decltype(fn(std::declval<Connection&>()))>> {

@@ -24,8 +24,10 @@ namespace halcyon {
 class ResultSet;    // fwd
 class Transaction;  // fwd (defined in transaction.hpp)
 
-// A non-owning view of the current cursor row. Valid only at the iterator's
-// current position (forward-only); reads columns lazily via the seam.
+/// \brief Non-owning view of the current cursor row; valid only at the iterator's position.
+///
+/// Read columns via `as<Ts...>()` (throws on mismatch) or `try_as<Ts...>()` (Result form).
+/// Valid only during forward iteration of the owning `ResultSet`.
 class Row {
 public:
     // owner is the streaming ResultSet this row belongs to (null for a Row not
@@ -152,9 +154,11 @@ private:
     detail::cli::StatementHandle handle_;
 };
 
-// A forward-only result cursor over a statement. May borrow the statement
-// (Statement keeps ownership) or own it (created by Connection::query). Single
-// active cursor per statement; do not outlive the owning Statement when borrowing.
+/// \brief Forward-only result cursor over a prepared statement.
+///
+/// Iterate with a range-for loop yielding `Row` objects. After the loop, check
+/// `ok()`/`error()` to distinguish a clean end from a mid-stream fetch failure.
+/// Move-only; a single active cursor per statement.
 class ResultSet {
 public:
     ResultSet(ResultSet&&) = default;
@@ -265,9 +269,11 @@ Result<ResultSet> Statement::execute_query(const Args&... args) {
     return ResultSet::create_borrowing(*driver_, handle_);
 }
 
-// A single logical connection over the seam. Owns the physical connection handle
-// and disconnects on destruction. Move-only; not safe for concurrent use by
-// multiple threads (matches CLI handle semantics).
+/// \brief Single logical Db2 connection over the CLI seam.
+///
+/// Owns the physical connection handle; disconnects on destruction. Move-only
+/// and not safe for concurrent use by multiple threads. Normally obtained via
+/// `Database` (which leases connections from its `ConnectionPool`).
 class Connection {
 public:
     static Result<Connection> open(detail::cli::ICliDriver& driver,

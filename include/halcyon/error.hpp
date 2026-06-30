@@ -22,6 +22,10 @@ enum class ErrorCode {
 // Human-readable name for an ErrorCode (never null).
 const char* to_string(ErrorCode code) noexcept;
 
+/// \brief Structured error value returned by all fallible Halcyon operations.
+///
+/// Carries a typed `ErrorCode`, the raw 5-char SQLSTATE, the Db2 native code,
+/// a human-readable message, and a `retriable` flag that drives auto-retry.
 struct Error {
     ErrorCode code = ErrorCode::Unknown;
     std::string sqlstate;    // raw 5-char SQLSTATE, e.g. "08001"
