@@ -6,6 +6,17 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+# Define PROJECT_IS_TOP_LEVEL for CMake < 3.21 so we can keep the 3.20 floor.
+# When Halcyon is consumed via add_subdirectory/FetchContent it is NOT top-level,
+# and developer-only targets (tests, examples) must default OFF.
+if(NOT DEFINED PROJECT_IS_TOP_LEVEL)
+    if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+        set(PROJECT_IS_TOP_LEVEL TRUE)
+    else()
+        set(PROJECT_IS_TOP_LEVEL FALSE)
+    endif()
+endif()
+
 # Single-source the version: generate include/halcyon/version.hpp from the CMake
 # project version into the build tree. This generated header is the only one the
 # compiler sees (the hand-maintained source header was removed).
@@ -20,7 +31,7 @@ endif()
 
 option(HALCYON_WITH_PROMETHEUS "Build prometheus-cpp metrics adapter" OFF)
 option(HALCYON_WITH_OTEL "Build opentelemetry-cpp tracing adapter" OFF)
-option(HALCYON_BUILD_TESTS "Build tests" ON)
+option(HALCYON_BUILD_TESTS "Build tests" ${PROJECT_IS_TOP_LEVEL})
 option(HALCYON_BUILD_INTEGRATION_TESTS "Build Dockerized Db2 integration tests" OFF)
 option(HALCYON_BUILD_EXAMPLES "Build examples" OFF)
 option(HALCYON_WARNINGS_AS_ERRORS "Treat warnings as errors" OFF)
@@ -174,6 +185,14 @@ if(HALCYON_BUILD_TESTS)
                 -DSMOKE_CONFIG=$<CONFIG>
                 -DHALCYON_EXPECTED_VERSION=${PROJECT_VERSION}
                 -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/run_smoke_test.cmake)
+
+        add_test(NAME halcyon_fetchcontent_smoke
+            COMMAND ${CMAKE_COMMAND}
+                -DHALCYON_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+                -DHALCYON_BUILD_DIR=${CMAKE_CURRENT_BINARY_DIR}
+                -DDB2_CLIDRIVER_ROOT=${DB2_CLIDRIVER_ROOT}
+                -DSMOKE_CONFIG=$<CONFIG>
+                -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/run_fetchcontent_test.cmake)
     endif()
 endif()
 
