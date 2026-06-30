@@ -11,10 +11,10 @@ concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# Default least privilege for every job; the docs job elevates pages/id-token
+# (OIDC) only for itself, so build/test jobs never carry a Pages deploy token.
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
 jobs:
   # ---------------------------------------------------------------------------
@@ -273,6 +273,11 @@ jobs:
   # ---------------------------------------------------------------------------
   docs:
     runs-on: ubuntu-24.04
+    # Pages deploy needs OIDC; scope it to this job only (top level is read-only).
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
