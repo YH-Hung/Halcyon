@@ -167,9 +167,28 @@ The CLI driver library directory is added to the RPATH automatically, so tests a
 
 ### Using Halcyon in your CMake project
 
+**Installed (find_package):**
+
 ```cmake
-find_package(Halcyon REQUIRED)
+find_package(Halcyon 1.0 REQUIRED)
 target_link_libraries(my_app PRIVATE halcyon::halcyon)
+```
+
+**From source (FetchContent):**
+
+```cmake
+include(FetchContent)
+FetchContent_Declare(Halcyon
+    GIT_REPOSITORY https://github.com/YH-Hung/Halcyon.git
+    GIT_TAG        v1.0.0)
+FetchContent_MakeAvailable(Halcyon)
+target_link_libraries(my_app PRIVATE halcyon::halcyon)
+```
+
+Both modes require you to supply the IBM Db2 CLI driver, e.g.:
+
+```bash
+cmake -S . -B build -DDB2_CLIDRIVER_ROOT=/path/to/clidriver
 ```
 
 ## Architecture
@@ -278,6 +297,21 @@ Full API documentation is in [`docs/guide/`](docs/guide/index.md):
 - Do not leak `sqlcli1.h` types above the `detail::cli` seam.
 - Do not add hard dependencies on `prometheus-cpp` or `opentelemetry-cpp` in core code.
 - See `AGENTS.md` for full conventions and `docs/superpowers/specs/` for the design spec.
+
+## Versioning & compatibility
+
+Halcyon follows [Semantic Versioning](https://semver.org/) for its **public C++
+API** — everything under `include/halcyon/` except `include/halcyon/detail/`.
+Symbols under `detail::` are implementation details and may change in any release.
+
+- **Source compatibility** is the guarantee: consume Halcyon from source
+  (`find_package` against your own build, or `FetchContent`). No binary-ABI
+  stability is promised across versions.
+- The **IBM Db2 CLI driver (`clidriver`) is a user-supplied dependency** and is
+  not redistributed by this project. Provide it via `DB2_CLIDRIVER_ROOT` (or the
+  vendored `third_party/clidriver`) in every consumption mode.
+
+See [`CHANGELOG.md`](CHANGELOG.md) for the per-release history.
 
 ## License
 
