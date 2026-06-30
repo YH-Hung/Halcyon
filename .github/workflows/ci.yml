@@ -101,6 +101,63 @@ jobs:
         run: ctest --test-dir build -LE integration --output-on-failure
 
   # ---------------------------------------------------------------------------
+  # Consumption via FetchContent/add_subdirectory. No live DB.
+  # ---------------------------------------------------------------------------
+  fetchcontent:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            cmake ninja-build g++-13
+
+      - name: Set up Db2 CLI driver
+        uses: ./.github/actions/setup-db2-clidriver
+
+      - name: Configure
+        env:
+          CC: gcc-13
+          CXX: g++-13
+        run: cmake -S . -B build -G Ninja -DHALCYON_BUILD_TESTS=ON
+
+      - name: Build
+        run: cmake --build build -j
+
+      - name: FetchContent + install smoke tests
+        run: ctest --test-dir build -R smoke --output-on-failure
+
+  # ---------------------------------------------------------------------------
+  # macOS build + unit tests. Intel runner (macos-13) so the x86_64 IBM driver
+  # links and loads. No live DB.
+  # ---------------------------------------------------------------------------
+  build-test-macos:
+    runs-on: macos-13
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install toolchain
+        run: brew install cmake ninja
+
+      - name: Set up Db2 CLI driver
+        uses: ./.github/actions/setup-db2-clidriver
+
+      - name: Configure
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DHALCYON_BUILD_TESTS=ON \
+            -DHALCYON_WARNINGS_AS_ERRORS=ON
+
+      - name: Build
+        run: cmake --build build -j
+
+      - name: Test (unit + smoke)
+        run: ctest --test-dir build -LE integration --output-on-failure
+
+  # ---------------------------------------------------------------------------
   # Concurrency correctness under ThreadSanitizer. Mocks the seam, no live DB.
   # ---------------------------------------------------------------------------
   stress-tsan:
