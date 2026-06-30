@@ -44,6 +44,9 @@ git push origin main --tags
 Create the GitHub Release from the tag, pasting the `CHANGELOG.md` section as the
 notes. The `docs` CI job publishes the site for `main`/tags.
 
+> First-time setup: in repo Settings → Pages, set Source = "GitHub Actions" so
+> the `docs` workflow job can publish the site.
+
 ## 4. Compatibility check (major bumps)
 
 Before a major bump, confirm public-API changes under `include/halcyon/`

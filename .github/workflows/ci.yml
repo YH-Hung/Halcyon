@@ -11,6 +11,11 @@ concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
 jobs:
   # ---------------------------------------------------------------------------
   # Formatting + static analysis. clang-format is authoritative for style;
@@ -261,3 +266,35 @@ jobs:
       - name: Tear down Db2
         if: always()
         run: docker compose -f docker/docker-compose.yml down -v
+
+  # ---------------------------------------------------------------------------
+  # Build the docs site on every run (mkdocs --strict catches broken links);
+  # deploy to GitHub Pages only on main and tags.
+  # ---------------------------------------------------------------------------
+  docs:
+    runs-on: ubuntu-24.04
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install tooling
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends doxygen
+          python -m pip install -r docs/requirements.txt
+
+      - name: Build site (Doxygen + MkDocs --strict)
+        run: docs/build.sh
+
+      - name: Upload Pages artifact
+        if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')
+        uses: actions/deploy-pages@v4
