@@ -1,10 +1,18 @@
 cmake_minimum_required(VERSION 3.20)
-project(Halcyon VERSION 0.1.0 LANGUAGES CXX)
+project(Halcyon VERSION 1.0.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
+# Single-source the version: generate include/halcyon/version.hpp from the CMake
+# project version into the build tree. This generated header is the only one the
+# compiler sees (the hand-maintained source header was removed).
+configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/version.hpp.in"
+    "${CMAKE_CURRENT_BINARY_DIR}/generated/include/halcyon/version.hpp"
+    @ONLY)
 
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     set(CMAKE_BUILD_TYPE RelWithDebInfo CACHE STRING "Build type" FORCE)
@@ -44,6 +52,7 @@ add_library(halcyon::halcyon ALIAS halcyon)
 target_include_directories(halcyon
     PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/generated/include>
         $<INSTALL_INTERFACE:include>)
 
 target_compile_features(halcyon PUBLIC cxx_std_17)
@@ -119,6 +128,12 @@ install(DIRECTORY include/halcyon
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
     FILES_MATCHING PATTERN "*.hpp")
 
+# The generated version header lives in the build tree; install it alongside the
+# hand-written public headers.
+install(FILES
+    "${CMAKE_CURRENT_BINARY_DIR}/generated/include/halcyon/version.hpp"
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/halcyon)
+
 install(EXPORT halcyonTargets
     FILE HalcyonTargets.cmake
     NAMESPACE halcyon::
@@ -157,6 +172,7 @@ if(HALCYON_BUILD_TESTS)
                 -DDB2_CLIDRIVER_ROOT=${DB2_CLIDRIVER_ROOT}
                 -DDB2CLI_LIBRARY_DIR=${DB2CLI_LIBRARY_DIR}
                 -DSMOKE_CONFIG=$<CONFIG>
+                -DHALCYON_EXPECTED_VERSION=${PROJECT_VERSION}
                 -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/run_smoke_test.cmake)
     endif()
 endif()

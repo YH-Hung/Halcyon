@@ -38,7 +38,8 @@ run_step("consumer configure"
         -B "${consumer_build}"
         "-DCMAKE_PREFIX_PATH=${prefix}"
         "-DCMAKE_BUILD_TYPE=${SMOKE_CONFIG}"
-        "-DDB2_CLIDRIVER_ROOT=${DB2_CLIDRIVER_ROOT}")
+        "-DDB2_CLIDRIVER_ROOT=${DB2_CLIDRIVER_ROOT}"
+        "-DHALCYON_EXPECTED_VERSION=${HALCYON_EXPECTED_VERSION}")
 
 # 3. Build the consumer (link proves DB2::CLI propagation through the export).
 run_step("consumer build"

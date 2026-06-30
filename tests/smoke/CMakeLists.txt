@@ -16,3 +16,8 @@ if(DB2CLI_LIBRARY_DIR)
     set_target_properties(halcyon_smoke PROPERTIES
         BUILD_RPATH "${DB2CLI_LIBRARY_DIR}")
 endif()
+
+if(HALCYON_EXPECTED_VERSION)
+    target_compile_definitions(halcyon_smoke
+        PRIVATE HALCYON_EXPECTED_VERSION="${HALCYON_EXPECTED_VERSION}")
+endif()
