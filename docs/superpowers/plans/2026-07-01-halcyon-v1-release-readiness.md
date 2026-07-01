@@ -20,7 +20,7 @@
 - **Seam invariant:** only `src/detail/cli/` may include `sqlcli1.h`. (Unchanged here, but do not violate it.)
 - **Warnings:** `-Wall -Wextra -Wpedantic` clean; CI builds with `-Werror`.
 - **Commits:** Conventional Commits (`feat:`, `fix:`, `build:`, `docs:`, `chore:`, `test:`, `ci:`). Small and focused.
-- **macOS CI** uses an **Intel** runner (`macos-13`) so the x86_64 IBM driver links and loads.
+- **macOS CI** uses the newest available **Intel** runner (`macos-26-intel`) so the x86_64 IBM driver links and loads.
 
 ---
 
@@ -958,11 +958,11 @@ In `.github/workflows/ci.yml`, after the `fetchcontent` job add:
 
 ```yaml
   # ---------------------------------------------------------------------------
-  # macOS build + unit tests. Intel runner (macos-13) so the x86_64 IBM driver
-  # links and loads. No live DB.
+  # macOS build + unit tests. Intel runner so the x86_64 IBM driver links and
+  # loads. No live DB.
   # ---------------------------------------------------------------------------
   build-test-macos:
-    runs-on: macos-13
+    runs-on: macos-26-intel
     steps:
       - uses: actions/checkout@v4
 

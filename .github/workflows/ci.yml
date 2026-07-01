@@ -136,11 +136,11 @@ jobs:
         run: ctest --test-dir build -R smoke --output-on-failure
 
   # ---------------------------------------------------------------------------
-  # macOS build + unit tests. Intel runner (macos-13) so the x86_64 IBM driver
-  # links and loads. No live DB.
+  # macOS build + unit tests. Intel runner so the x86_64 IBM driver links and
+  # loads. No live DB.
   # ---------------------------------------------------------------------------
   build-test-macos:
-    runs-on: macos-13
+    runs-on: macos-26-intel
     steps:
       - uses: actions/checkout@v4
 
