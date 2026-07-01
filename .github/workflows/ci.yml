@@ -3,6 +3,7 @@ name: CI
 on:
   push:
     branches: [main]
+    tags: ['v*']
   pull_request:
   workflow_dispatch:
 
@@ -10,6 +11,11 @@ on:
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
+
+# Default least privilege for every job; the docs job elevates pages/id-token
+# (OIDC) only for itself, so build/test jobs never carry a Pages deploy token.
+permissions:
+  contents: read
 
 jobs:
   # ---------------------------------------------------------------------------
@@ -97,6 +103,63 @@ jobs:
         run: cmake --build build -j
 
       # Excludes the integration label; those need a live Db2 (see integration job).
+      - name: Test (unit + smoke)
+        run: ctest --test-dir build -LE integration --output-on-failure
+
+  # ---------------------------------------------------------------------------
+  # Consumption via FetchContent/add_subdirectory. No live DB.
+  # ---------------------------------------------------------------------------
+  fetchcontent:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            cmake ninja-build g++-13
+
+      - name: Set up Db2 CLI driver
+        uses: ./.github/actions/setup-db2-clidriver
+
+      - name: Configure
+        env:
+          CC: gcc-13
+          CXX: g++-13
+        run: cmake -S . -B build -G Ninja -DHALCYON_BUILD_TESTS=ON
+
+      - name: Build
+        run: cmake --build build -j
+
+      - name: FetchContent + install smoke tests
+        run: ctest --test-dir build -R smoke --output-on-failure
+
+  # ---------------------------------------------------------------------------
+  # macOS build + unit tests. Intel runner (macos-13) so the x86_64 IBM driver
+  # links and loads. No live DB.
+  # ---------------------------------------------------------------------------
+  build-test-macos:
+    runs-on: macos-13
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install toolchain
+        run: brew install cmake ninja
+
+      - name: Set up Db2 CLI driver
+        uses: ./.github/actions/setup-db2-clidriver
+
+      - name: Configure
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DHALCYON_BUILD_TESTS=ON \
+            -DHALCYON_WARNINGS_AS_ERRORS=ON
+
+      - name: Build
+        run: cmake --build build -j
+
       - name: Test (unit + smoke)
         run: ctest --test-dir build -LE integration --output-on-failure
 
@@ -204,3 +267,40 @@ jobs:
       - name: Tear down Db2
         if: always()
         run: docker compose -f docker/docker-compose.yml down -v
+
+  # ---------------------------------------------------------------------------
+  # Build the docs site on every run (mkdocs --strict catches broken links);
+  # deploy to GitHub Pages only on main and tags.
+  # ---------------------------------------------------------------------------
+  docs:
+    runs-on: ubuntu-24.04
+    # Pages deploy needs OIDC; scope it to this job only (top level is read-only).
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install tooling
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends doxygen
+          python -m pip install -r docs/requirements.txt
+
+      - name: Build site (Doxygen + MkDocs --strict)
+        run: docs/build.sh
+
+      - name: Upload Pages artifact
+        if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')
+        uses: actions/deploy-pages@v4

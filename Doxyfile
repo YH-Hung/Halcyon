@@ -1,0 +1,15 @@
+PROJECT_NAME           = "Halcyon"
+PROJECT_BRIEF          = "Modern C++17 client library for IBM Db2"
+OUTPUT_DIRECTORY       = docs
+HTML_OUTPUT            = api
+GENERATE_LATEX         = NO
+GENERATE_HTML          = YES
+INPUT                  = include/halcyon
+FILE_PATTERNS          = *.hpp
+RECURSIVE              = YES
+EXCLUDE                = include/halcyon/detail
+EXTRACT_ALL            = YES
+JAVADOC_AUTOBRIEF      = YES
+QUIET                  = YES
+WARN_IF_UNDOCUMENTED   = NO
+GENERATE_TREEVIEW      = YES

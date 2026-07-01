@@ -1,6 +1,11 @@
 #pragma once
 
-// Halcyon — modern C++17 IBM Db2 client. Umbrella header.
+/// \file halcyon.hpp
+/// \brief Umbrella header for the Halcyon C++17 IBM Db2 client library.
+///
+/// Include this single header to pull in the complete public API:
+/// Database, Connection, Transaction, ResultSet, Result<T>, Error,
+/// PoolConfig, Batch/batchOf, and the async entry points.
 #include "halcyon/async.hpp"
 #include "halcyon/connection.hpp"
 #include "halcyon/database.hpp"

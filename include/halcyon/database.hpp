@@ -51,8 +51,11 @@ void batch_append_tuple(std::vector<detail::cli::Value>& row, const Tuple& t,
 // available on both Transaction and ScopedTransaction. The batchOf helpers
 // below construct it.
 
-// batchOf for a vector of HALCYON_REFLECT'd structs: each field becomes a
-// positional bind in declaration order.
+/// \brief Build a `Batch` from a vector of `HALCYON_REFLECT`'d structs.
+///
+/// Each struct field (in declaration order) becomes one positional bind column.
+/// Pass the result to `Connection::executeBatch`, `Transaction::executeBatch`,
+/// or `Database::executeBatch`.
 template <class T>
 Batch batchOf(const std::vector<T>& items) {
     static_assert(reflect::Reflected<T>::value,
@@ -164,10 +167,11 @@ private:
     ResultSet rs_;
 };
 
-// A Transaction plus the pooled lease it runs on, so both are released together.
-// Returned by Database::begin(); move-only. operator-> forwards to the
-// Transaction. Declaration order matters: txn_ is destroyed (rolls back if not
-// committed) BEFORE lease_ returns the connection to the pool.
+/// \brief A Transaction plus the pooled lease it runs on, returned by `Database::begin()`.
+///
+/// Move-only; `operator->` and `operator*` forward to the inner Transaction.
+/// Rolls back automatically on destruction if not committed. Returns the
+/// connection to the pool when destroyed.
 class ScopedTransaction {
 public:
     ScopedTransaction(ScopedTransaction&&) noexcept = default;
@@ -235,9 +239,11 @@ private:
     Transaction txn_;
 };
 
-// High-level thread-safe entry point. Copyable handle: copies share one pool
-// (shared_ptr), so a Database can be passed by value across threads. Each call
-// acquires a pooled connection, runs, and releases it on return.
+/// \brief High-level entry point: a pooled, thread-safe Db2 database handle.
+///
+/// Open with `Database::open` (returns `Result<Database>`) or
+/// `Database::openOrThrow`. Provides query/execute/transaction/batch in both
+/// `Result<T>` and throwing styles. Safe to share across threads.
 class Database {
 public:
     // Ergonomic entry point (spec §5): opens over a real IBM Db2 CLI driver that

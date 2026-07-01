@@ -61,6 +61,10 @@ compile_commands.json
 *.swo
 *~
 
+# Generated documentation site
+site/
+docs/api/
+
 # OS
 .DS_Store
 Thumbs.db

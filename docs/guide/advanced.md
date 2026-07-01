@@ -49,7 +49,7 @@ hit_rate = halcyon_stmt_cache_total{result="hit"} /
 
 ---
 
-## Custom `TypeBinder<T>`
+## Custom `TypeBinder<T>` { #custom-typebinder }
 
 Specialize `TypeBinder<T>` to bind and read any type that Halcyon does not know
 about. Place the specialization in your own header (not in Halcyon source) after

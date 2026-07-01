@@ -12,10 +12,12 @@
 
 namespace halcyon {
 
-// A prepared set of positional parameter rows for executeBatch. Defined here
-// (below the seam's Value, above both transaction.hpp and database.hpp) so the
-// Batch overloads of executeBatch are available on Transaction and
-// ScopedTransaction alike. Built via the batchOf helpers in database.hpp.
+/// \brief Prepared set of positional parameter rows for `executeBatch`.
+///
+/// Build with the `batchOf` helpers in `database.hpp`. Pass to
+/// `Connection::executeBatch`, `Transaction::executeBatch`, or
+/// `Database::executeBatch` to insert/update multiple rows in a single
+/// array-binding round-trip.
 struct Batch {
     std::vector<std::vector<detail::cli::Value>> rows;
 };

@@ -1,0 +1,48 @@
+site_name: Halcyon
+site_description: Modern C++17 client library for IBM Db2
+docs_dir: docs
+# docs/ also holds non-site material (specs, plans, build tooling) and the
+# generated Doxygen tree. Exclude the former from the build entirely, and tell
+# --strict that the Doxygen output is intentionally outside the nav.
+exclude_docs: |
+  superpowers/
+  requirements.txt
+  build.sh
+  README.md
+  RELEASING.md
+not_in_nav: |
+  api/**
+# Promote broken intra-doc fragment links from INFO to WARNING so `--strict`
+# (which fails on warnings) enforces the "no broken links" docs gate.
+validation:
+  links:
+    anchors: warn
+theme:
+  name: material
+  features:
+    - navigation.sections
+    - navigation.top
+    - content.code.copy
+    - search.highlight
+markdown_extensions:
+  - admonition
+  - attr_list
+  - toc:
+      permalink: true
+  - pymdownx.highlight
+  - pymdownx.superfences
+nav:
+  - Home: index.md
+  - Guide:
+      - Overview: guide/index.md
+      - Getting Started: guide/getting-started.md
+      - Error Handling: guide/error-handling.md
+      - Querying: guide/querying.md
+      - Parameters & Types: guide/parameters-and-types.md
+      - Connection Pool: guide/connection-pool.md
+      - Transactions: guide/transactions.md
+      - Batch Operations: guide/batch-operations.md
+      - Async: guide/async.md
+      - Observability: guide/observability.md
+      - Advanced: guide/advanced.md
+  - API Reference: api/index.html

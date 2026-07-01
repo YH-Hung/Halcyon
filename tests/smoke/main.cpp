@@ -17,5 +17,9 @@ int main() {
     auto driver = halcyon::detail::cli::make_db2_cli_driver();
     if (!driver) return 2;
 
-    return v == "0.1.0" ? 0 : 1;
+#ifdef HALCYON_EXPECTED_VERSION
+    return v == HALCYON_EXPECTED_VERSION ? 0 : 3;
+#else
+    return v.empty() ? 4 : 0;
+#endif
 }

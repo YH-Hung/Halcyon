@@ -8,6 +8,10 @@
 
 namespace halcyon {
 
+/// \brief Holds either a value of type `T` or an `Error` (vendored, C++17).
+///
+/// `.value()` throws `Exception` on error; `.ok()`/`operator bool` test success.
+/// Compose with `map`/`and_then`/`or_else`.
 template <class T>
 class Result {
 public:

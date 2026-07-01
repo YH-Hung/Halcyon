@@ -11,10 +11,12 @@
 
 namespace halcyon {
 
-// RAII unit of work over a single Connection. Autocommit is OFF for its
-// lifetime; commit()/rollback() end it and restore autocommit. If neither is
-// called before destruction, the transaction is rolled back. Move-only; never
-// auto-retried (the spec requires the whole transaction to be re-driven).
+/// \brief RAII unit of work over a single `Connection`.
+///
+/// Autocommit is disabled for the transaction's lifetime. Call `commit()` or
+/// `rollback()` to end it; if neither is called the destructor rolls back.
+/// Move-only; never auto-retried — the caller must re-drive the whole
+/// transaction on failure.
 class Transaction {
 public:
     Transaction(Transaction&& o) noexcept
