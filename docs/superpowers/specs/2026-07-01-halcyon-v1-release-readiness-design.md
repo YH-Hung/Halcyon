@@ -231,12 +231,13 @@ target_link_libraries(my_app PRIVATE halcyon::halcyon)
 
 ### C.3 Integration & publishing
 
-- Build order: run `mkdocs build` first (producing `site/`), then run Doxygen with
-  its output directory set to `site/api/`. The Doxygen HTML is thus published
-  verbatim under `/api/`, and the MkDocs nav links to `api/index.html`. No
-  MkDocs↔Doxygen theme-bridge plugin (robustness over visual unification). The
-  Doxygen output is never committed — it is a build artifact under `site/`, which
-  is gitignored.
+- Build order: run Doxygen first (output directory `docs/api/`), then run
+  `mkdocs build`, which copies that tree into the published `site/api/`
+  (`docs_dir: docs`, with `not_in_nav: api/**` so `--strict` ignores the generated
+  subtree). The Doxygen HTML is thus published verbatim under `/api/`, and the
+  MkDocs nav links to `api/index.html`. No MkDocs↔Doxygen theme-bridge plugin
+  (robustness over visual unification). The Doxygen output is never committed —
+  both `docs/api/` and `site/` are gitignored build artifacts.
 - A single script (`docs/build.sh`, documented in `docs/README.md` and
   `docs/RELEASING.md`) runs both steps in order so local and CI builds are
   identical.
@@ -261,21 +262,22 @@ action for the driver, same as other no-DB jobs).
   permissions and a `github-pages` environment.
 
 ### D.3 macOS `build-test` job
-A `macos-14` (Apple-silicon) job mirroring the Linux `build-test`: set up the
-driver, configure with `-DHALCYON_BUILD_TESTS=ON -DHALCYON_WARNINGS_AS_ERRORS=ON`,
-build, and run `ctest -LE integration` (unit + smoke; no live DB). This gives the
-supported-but-untested macOS platform real CI coverage. The macOS driver
-quarantine caveat from `AGENTS.md` applies; the `setup-db2-clidriver` action (or a
-macOS branch of it) must clear quarantine on the fetched driver. If a hosted macOS
-runner cannot run the GSKit-dependent driver load even for the no-connect smoke
-test, the job degrades to build-only + unit tests that do not instantiate the real
-driver, documented inline.
+A `macos-13` (**Intel**) job mirroring the Linux `build-test`: set up the driver,
+configure with `-DHALCYON_BUILD_TESTS=ON -DHALCYON_WARNINGS_AS_ERRORS=ON`, build,
+and run `ctest -LE integration` (unit + smoke; no live DB). This gives the
+supported-but-untested macOS platform real CI coverage. **An Intel runner is
+required**: the IBM `clidriver` is x86_64-only, so on an Apple-silicon runner
+(`macos-14`/`-15`) the x86_64 `libdb2.dylib` would fail to link and load — the
+Intel `macos-13` image links and loads it, and can therefore run the no-connect
+smoke test. The macOS driver quarantine caveat from `AGENTS.md` applies; the
+`setup-db2-clidriver` action gains a macOS branch that clears quarantine on the
+fetched driver.
 
 ## 7. Testing strategy
 
 | Workstream | Verification |
 |---|---|
-| A — version single-source | Reconfigure regenerates `version.hpp`; no stray literals; version unit test green; smoke test passes without hand-editing |
+| A — version single-source | Reconfigure regenerates `version.hpp`; no stray version literals in the source/build tree (`include`, `src`, `tests`, `cmake`, `CMakeLists.txt`) — historical plan/spec docs legitimately retain the version current when they were written; version unit test green; smoke test passes without hand-editing |
 | A — `1.0.0` bump | `halcyon::version()` reports `1.0.0`; `HalcyonConfigVersion.cmake` reports `1.0.0` |
 | B — subdir defaults | New `FetchContent` consumption test: consumer build does **not** build Halcyon tests or fetch GoogleTest; links and runs |
 | B — find_package | Existing `halcyon_install_smoke` still passes unchanged |
