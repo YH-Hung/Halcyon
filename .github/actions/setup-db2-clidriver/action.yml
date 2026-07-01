@@ -52,7 +52,18 @@ runs:
       run: |
         set -euo pipefail
         mkdir -p third_party
-        curl -fSL "${{ steps.src.outputs.url }}" -o /tmp/clidriver.tar.gz
+        for attempt in 1 2 3 4 5; do
+          echo "Downloading Db2 CLI driver (attempt ${attempt}/5)"
+          rm -f /tmp/clidriver.tar.gz
+          if curl --connect-timeout 20 --max-time 120 -fSL "${{ steps.src.outputs.url }}" -o /tmp/clidriver.tar.gz; then
+            break
+          fi
+          if [ "$attempt" -eq 5 ]; then
+            echo "Failed to download Db2 CLI driver after ${attempt} attempts" >&2
+            exit 1
+          fi
+          sleep $((attempt * 5))
+        done
         if [ "$RUNNER_OS" = "macOS" ]; then
           echo "${{ steps.src.outputs.sha256 }}  /tmp/clidriver.tar.gz" | shasum -a 256 -c -
         else
