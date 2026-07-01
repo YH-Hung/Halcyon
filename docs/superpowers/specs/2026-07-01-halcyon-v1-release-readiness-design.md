@@ -262,13 +262,13 @@ action for the driver, same as other no-DB jobs).
   permissions and a `github-pages` environment.
 
 ### D.3 macOS `build-test` job
-A `macos-13` (**Intel**) job mirroring the Linux `build-test`: set up the driver,
+A `macos-26-intel` job mirroring the Linux `build-test`: set up the driver,
 configure with `-DHALCYON_BUILD_TESTS=ON -DHALCYON_WARNINGS_AS_ERRORS=ON`, build,
 and run `ctest -LE integration` (unit + smoke; no live DB). This gives the
 supported-but-untested macOS platform real CI coverage. **An Intel runner is
-required**: the IBM `clidriver` is x86_64-only, so on an Apple-silicon runner
-(`macos-14`/`-15`) the x86_64 `libdb2.dylib` would fail to link and load — the
-Intel `macos-13` image links and loads it, and can therefore run the no-connect
+required**: the IBM `clidriver` is x86_64-only, so arm64 runner labels such as
+`macos-latest`, `macos-15`, or `macos-26` would fail to link and load the x86_64
+`libdb2.dylib`, while the Intel `macos-26-intel` image can run the no-connect
 smoke test. The macOS driver quarantine caveat from `AGENTS.md` applies; the
 `setup-db2-clidriver` action gains a macOS branch that clears quarantine on the
 fetched driver.
