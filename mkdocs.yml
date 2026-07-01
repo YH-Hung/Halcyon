@@ -12,6 +12,11 @@ exclude_docs: |
   RELEASING.md
 not_in_nav: |
   api/**
+# Promote broken intra-doc fragment links from INFO to WARNING so `--strict`
+# (which fails on warnings) enforces the "no broken links" docs gate.
+validation:
+  links:
+    anchors: warn
 theme:
   name: material
   features:
@@ -21,6 +26,7 @@ theme:
     - search.highlight
 markdown_extensions:
   - admonition
+  - attr_list
   - toc:
       permalink: true
   - pymdownx.highlight

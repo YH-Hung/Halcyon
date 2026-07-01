@@ -16,7 +16,7 @@ String literals are converted to `std::string` automatically:
 db.query("SELECT * FROM users WHERE city = ?", "NYC");  // works
 ```
 
-## Named parameters (`:name`)
+## Named parameters (`:name`) { #named-parameters }
 
 Build a `halcyon::params` object and pass it as the last argument:
 
@@ -98,7 +98,7 @@ for (auto& row : rows) {
 }
 ```
 
-## `HALCYON_REFLECT` — struct mapping
+## `HALCYON_REFLECT` — struct mapping { #halcyon_reflect }
 
 Place `HALCYON_REFLECT` in the **global namespace** after the struct definition:
 
