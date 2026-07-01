@@ -262,16 +262,20 @@ action for the driver, same as other no-DB jobs).
   permissions and a `github-pages` environment.
 
 ### D.3 macOS `build-test` job
-A `macos-26-intel` job mirroring the Linux `build-test`: set up the driver,
-configure with `-DHALCYON_BUILD_TESTS=ON -DHALCYON_WARNINGS_AS_ERRORS=ON`, build,
-and run `ctest -LE integration` (unit + smoke; no live DB). This gives the
+A `macos-26-intel` job mirrors the Linux `build-test`: configure with
+`-DHALCYON_BUILD_TESTS=ON -DHALCYON_WARNINGS_AS_ERRORS=ON`, build, and run
+`ctest -LE integration` (unit + smoke; no live DB). This gives the
 supported-but-untested macOS platform real CI coverage. **An Intel runner is
 required**: the IBM `clidriver` is x86_64-only, so arm64 runner labels such as
 `macos-latest`, `macos-15`, or `macos-26` would fail to link and load the x86_64
 `libdb2.dylib`, while the Intel `macos-26-intel` image can run the no-connect
-smoke test. The macOS driver quarantine caveat from `AGENTS.md` applies; the
-`setup-db2-clidriver` action gains a macOS branch that clears quarantine on the
-fetched driver.
+smoke test.
+
+The IBM public driver host is not reliably resolvable from GitHub's macOS cloud,
+so CI prepares the macOS `clidriver` in an Ubuntu job and uploads it as a
+short-lived GitHub artifact. The macOS job downloads that artifact, extracts it
+under `third_party/clidriver`, and performs the quarantine cleanup from
+`AGENTS.md` before configuring CMake.
 
 ## 7. Testing strategy
 

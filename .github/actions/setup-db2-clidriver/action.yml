@@ -5,6 +5,9 @@ description: >
   repo, hence gitignored), so CI downloads it instead of vendoring it.
 
 inputs:
+  platform:
+    description: Driver platform to fetch (`auto`, `linux`, or `macos`).
+    default: auto
   url:
     description: Tarball URL (IBM publishes only a rolling "latest" for linux x64).
     default: https://public.dhe.ibm.com/ibmdl/export/pub/software/data/db2/drivers/odbc_cli/linuxx64_odbc_cli.tar.gz
@@ -31,10 +34,31 @@ runs:
       id: src
       shell: bash
       run: |
-        if [ "$RUNNER_OS" = "macOS" ]; then
+        case "${{ inputs.platform }}" in
+          auto)
+            if [ "$RUNNER_OS" = "macOS" ]; then
+              platform=macos
+            else
+              platform=linux
+            fi
+            ;;
+          linux|macos)
+            platform="${{ inputs.platform }}"
+            ;;
+          *)
+            echo "Unsupported clidriver platform: ${{ inputs.platform }}" >&2
+            exit 1
+            ;;
+        esac
+
+        if [ "$platform" = "macos" ]; then
+          echo "platform=macos" >> "$GITHUB_OUTPUT"
+          echo "cache_platform=macOS" >> "$GITHUB_OUTPUT"
           echo "url=${{ inputs.macos_url }}" >> "$GITHUB_OUTPUT"
           echo "sha256=${{ inputs.macos_sha256 }}" >> "$GITHUB_OUTPUT"
         else
+          echo "platform=linux" >> "$GITHUB_OUTPUT"
+          echo "cache_platform=Linux" >> "$GITHUB_OUTPUT"
           echo "url=${{ inputs.url }}" >> "$GITHUB_OUTPUT"
           echo "sha256=${{ inputs.sha256 }}" >> "$GITHUB_OUTPUT"
         fi
@@ -44,7 +68,7 @@ runs:
       uses: actions/cache@v4
       with:
         path: third_party/clidriver
-        key: clidriver-${{ runner.os }}-${{ steps.src.outputs.sha256 }}
+        key: clidriver-${{ steps.src.outputs.cache_platform }}-${{ steps.src.outputs.sha256 }}
 
     - name: Download, verify, extract
       if: steps.cache.outputs.cache-hit != 'true'
