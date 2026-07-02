@@ -1,5 +1,4 @@
 #include <sqlcli1.h>
-#include <sqlext.h>
 
 #include <cstddef>
 #include <cstring>

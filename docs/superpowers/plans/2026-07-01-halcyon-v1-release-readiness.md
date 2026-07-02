@@ -20,7 +20,7 @@
 - **Seam invariant:** only `src/detail/cli/` may include `sqlcli1.h`. (Unchanged here, but do not violate it.)
 - **Warnings:** `-Wall -Wextra -Wpedantic` clean; CI builds with `-Werror`.
 - **Commits:** Conventional Commits (`feat:`, `fix:`, `build:`, `docs:`, `chore:`, `test:`, `ci:`). Small and focused.
-- **macOS CI** uses an **Intel** runner (`macos-13`) so the x86_64 IBM driver links and loads.
+- **macOS CI** uses the newest available **Intel** runner (`macos-26-intel`) so the x86_64 IBM driver links and loads.
 
 ---
 
@@ -845,10 +845,14 @@ driver-setup action to fetch the macOS driver.
 
 - [ ] **Step 1: Add macOS support to the driver-setup action**
 
-In `.github/actions/setup-db2-clidriver/action.yml`, add macOS inputs and an
-OS-aware download. Add to `inputs:` (after the existing `sha256` input):
+In `.github/actions/setup-db2-clidriver/action.yml`, add a platform selector,
+macOS inputs, and an OS-aware download. Add to `inputs:` before the existing
+`url` input:
 
 ```yaml
+  platform:
+    description: Driver platform to fetch (`auto`, `linux`, or `macos`).
+    default: auto
   macos_url:
     description: macOS (x86_64) clidriver tarball URL.
     default: https://public.dhe.ibm.com/ibmdl/export/pub/software/data/db2/drivers/odbc_cli/macos64_odbc_cli.tar.gz
@@ -867,10 +871,31 @@ OS-aware variants:
       id: src
       shell: bash
       run: |
-        if [ "$RUNNER_OS" = "macOS" ]; then
+        case "${{ inputs.platform }}" in
+          auto)
+            if [ "$RUNNER_OS" = "macOS" ]; then
+              platform=macos
+            else
+              platform=linux
+            fi
+            ;;
+          linux|macos)
+            platform="${{ inputs.platform }}"
+            ;;
+          *)
+            echo "Unsupported clidriver platform: ${{ inputs.platform }}" >&2
+            exit 1
+            ;;
+        esac
+
+        if [ "$platform" = "macos" ]; then
+          echo "platform=macos" >> "$GITHUB_OUTPUT"
+          echo "cache_platform=macOS" >> "$GITHUB_OUTPUT"
           echo "url=${{ inputs.macos_url }}" >> "$GITHUB_OUTPUT"
           echo "sha256=${{ inputs.macos_sha256 }}" >> "$GITHUB_OUTPUT"
         else
+          echo "platform=linux" >> "$GITHUB_OUTPUT"
+          echo "cache_platform=Linux" >> "$GITHUB_OUTPUT"
           echo "url=${{ inputs.url }}" >> "$GITHUB_OUTPUT"
           echo "sha256=${{ inputs.sha256 }}" >> "$GITHUB_OUTPUT"
         fi
@@ -880,7 +905,7 @@ OS-aware variants:
       uses: actions/cache@v4
       with:
         path: third_party/clidriver
-        key: clidriver-${{ runner.os }}-${{ steps.src.outputs.sha256 }}
+        key: clidriver-${{ steps.src.outputs.cache_platform }}-${{ steps.src.outputs.sha256 }}
 
     - name: Download, verify, extract
       if: steps.cache.outputs.cache-hit != 'true'
@@ -888,7 +913,18 @@ OS-aware variants:
       run: |
         set -euo pipefail
         mkdir -p third_party
-        curl -fSL "${{ steps.src.outputs.url }}" -o /tmp/clidriver.tar.gz
+        for attempt in 1 2 3 4 5; do
+          echo "Downloading Db2 CLI driver (attempt ${attempt}/5)"
+          rm -f /tmp/clidriver.tar.gz
+          if curl --connect-timeout 20 --max-time 120 -fSL "${{ steps.src.outputs.url }}" -o /tmp/clidriver.tar.gz; then
+            break
+          fi
+          if [ "$attempt" -eq 5 ]; then
+            echo "Failed to download Db2 CLI driver after ${attempt} attempts" >&2
+            exit 1
+          fi
+          sleep $((attempt * 5))
+        done
         if [ "$RUNNER_OS" = "macOS" ]; then
           echo "${{ steps.src.outputs.sha256 }}  /tmp/clidriver.tar.gz" | shasum -a 256 -c -
         else
@@ -952,25 +988,63 @@ In `.github/workflows/ci.yml`, after the `build-test` job (line 101) add:
         run: ctest --test-dir build -R smoke --output-on-failure
 ```
 
-- [ ] **Step 4: Add the macOS build-test job**
+- [ ] **Step 4: Add the macOS driver preparation and build-test jobs**
 
 In `.github/workflows/ci.yml`, after the `fetchcontent` job add:
 
 ```yaml
   # ---------------------------------------------------------------------------
-  # macOS build + unit tests. Intel runner (macos-13) so the x86_64 IBM driver
-  # links and loads. No live DB.
+  # The macOS cloud cannot reliably resolve IBM's public driver host. Fetch the
+  # macOS driver from Ubuntu, where the existing dependency path is known-good,
+  # and hand it to the macOS job as a GitHub artifact.
+  # ---------------------------------------------------------------------------
+  prepare-macos-clidriver:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up macOS Db2 CLI driver
+        uses: ./.github/actions/setup-db2-clidriver
+        with:
+          platform: macos
+
+      - name: Package macOS Db2 CLI driver
+        run: tar -czf macos-clidriver.tar.gz -C third_party clidriver
+
+      - name: Upload macOS Db2 CLI driver
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-clidriver
+          path: macos-clidriver.tar.gz
+          if-no-files-found: error
+          retention-days: 1
+
+  # ---------------------------------------------------------------------------
+  # macOS build + unit tests. Intel runner so the x86_64 IBM driver links and
+  # loads. No live DB.
   # ---------------------------------------------------------------------------
   build-test-macos:
-    runs-on: macos-13
+    runs-on: macos-26-intel
+    needs: prepare-macos-clidriver
     steps:
       - uses: actions/checkout@v4
 
       - name: Install toolchain
         run: brew install cmake ninja
 
-      - name: Set up Db2 CLI driver
-        uses: ./.github/actions/setup-db2-clidriver
+      - name: Download macOS Db2 CLI driver
+        uses: actions/download-artifact@v4
+        with:
+          name: macos-clidriver
+          path: /tmp/macos-clidriver
+
+      - name: Set up macOS Db2 CLI driver
+        run: |
+          mkdir -p third_party
+          tar -xzf /tmp/macos-clidriver/macos-clidriver.tar.gz -C third_party
+          test -f third_party/clidriver/include/sqlcli1.h
+          chmod -R u+w third_party/clidriver
+          xattr -r -d com.apple.quarantine third_party/clidriver || true
 
       - name: Configure
         run: |
