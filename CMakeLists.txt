@@ -170,6 +170,15 @@ install(FILES
 
 if(HALCYON_BUILD_TESTS)
     enable_testing()
+
+    add_test(NAME halcyon_db2_cli_include_isolation
+        COMMAND ${CMAKE_COMMAND}
+            -DHALCYON_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+            -DHALCYON_BUILD_DIR=${CMAKE_CURRENT_BINARY_DIR}
+            -DDB2CLI_INCLUDE_DIR=${DB2CLI_INCLUDE_DIR}
+            -DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/check_db2_cli_include_isolation.cmake)
+
     add_subdirectory(tests)
 
     # Install smoke test: install to a scratch prefix, then configure+build+run a
