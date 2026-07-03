@@ -3,6 +3,11 @@
 The published site combines the narrative guide (MkDocs Material, source in
 `docs/guide/`) with a generated API reference (Doxygen, from `include/halcyon/`).
 
+Published URLs:
+
+- Site: https://yh-hung.github.io/Halcyon/
+- API reference: https://yh-hung.github.io/Halcyon/api/index.html
+
 ## Build locally
 
 ```bash

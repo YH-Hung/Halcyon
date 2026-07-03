@@ -2,6 +2,11 @@
 
 A modern **C++17** client library for **IBM Db2**, built on the IBM Db2 CLI (`sqlcli1.h`). Halcyon provides a high-level, ergonomic, type-safe API in both object-oriented/fluent and functional styles — connection pooling, transparent reconnect, safe auto-retry on transient failures, `std::future` async, and optional observability via Prometheus and OpenTelemetry.
 
+## Documentation
+
+- **Published docs:** https://yh-hung.github.io/Halcyon/
+- **API reference:** https://yh-hung.github.io/Halcyon/api/index.html
+
 ## Features
 
 - **High-level API** — one connection string and you're ready to query
@@ -274,7 +279,8 @@ OpenTelemetry spans: `halcyon.query`, `halcyon.execute`, `halcyon.transaction`, 
 
 ## Developer guide
 
-Full API documentation is in [`docs/guide/`](docs/guide/index.md):
+Full guide sources are in [`docs/guide/`](docs/guide/index.md), and the
+published documentation is at https://yh-hung.github.io/Halcyon/.
 
 | Page | Topic |
 |---|---|

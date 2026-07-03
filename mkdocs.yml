@@ -1,5 +1,7 @@
 site_name: Halcyon
 site_description: Modern C++17 client library for IBM Db2
+site_url: https://yh-hung.github.io/Halcyon/
+repo_url: https://github.com/YH-Hung/Halcyon
 docs_dir: docs
 # docs/ also holds non-site material (specs, plans, build tooling) and the
 # generated Doxygen tree. Exclude the former from the build entirely, and tell
