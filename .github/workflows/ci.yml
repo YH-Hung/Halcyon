@@ -307,10 +307,8 @@ jobs:
         run: docker compose -f docker/docker-compose.yml down -v
 
   # ---------------------------------------------------------------------------
-  # Build the docs site on every run (mkdocs --strict catches broken links).
-  # Deploy is opt-in: set repository variable HALCYON_DEPLOY_PAGES=true after
-  # enabling GitHub Pages. Without that, CI still validates docs but does not
-  # fail trying to deploy to a repository with Pages disabled.
+  # Build the docs site on every run (mkdocs --strict catches broken links);
+  # deploy to GitHub Pages only on main and tags.
   # ---------------------------------------------------------------------------
   docs:
     runs-on: ubuntu-24.04
@@ -335,12 +333,12 @@ jobs:
         run: docs/build.sh
 
       - name: Upload Pages artifact
-        if: vars.HALCYON_DEPLOY_PAGES == 'true' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/'))
+        if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')
         uses: actions/upload-pages-artifact@v3
         with:
           path: site
 
       - name: Deploy to GitHub Pages
         id: deployment
-        if: vars.HALCYON_DEPLOY_PAGES == 'true' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/'))
+        if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')
         uses: actions/deploy-pages@v4
