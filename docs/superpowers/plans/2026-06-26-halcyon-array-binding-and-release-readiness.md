@@ -906,7 +906,7 @@ git commit -m "test: live batch-insert throughput benchmark (per-row vs array vs
 
 In `docs/superpowers/specs/2026-06-17-halcyon-db2-cpp-design.md`, replace the "Bulk / batch (v1 in-scope)" block (line ~188) with text that keeps it v1 in-scope but describes array binding and the failure contract:
 
-```markdown
+````markdown
 ### Bulk / batch (v1 in-scope)
 
 `executeBatch` binds many rows as a Db2 CLI **column-wise parameter array** and
@@ -920,7 +920,7 @@ Any row failure surfaces as a single `Error` (message includes the first failing
 row index); wrap the call in a transaction for all-or-nothing and re-drive the
 whole batch on error. See
 `docs/superpowers/specs/2026-06-26-halcyon-array-binding-design.md`.
-```
+````
 
 - [ ] **Step 2: Update the batch guide**
 
@@ -1204,4 +1204,3 @@ git commit -m "ci: align workflow with local verification (unit/stress/examples)
 - [ ] **Benchmark recorded:** array ≥ per-row, transaction fastest, numbers in spec §9
 - [ ] **No stale `- [ ]`** in the OTel/orders plans for work that is actually done
 - [ ] Use superpowers:requesting-code-review before merging the branch
-```
