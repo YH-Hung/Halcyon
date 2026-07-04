@@ -339,25 +339,25 @@ TEST(DatabaseBrokenConn, SuccessfulTransactionKeepsConnection) {
     EXPECT_EQ(driver.connectCalls, 1);
 }
 
-TEST(DatabaseBrokenConn, MidStreamGetColumnConnectionErrorDiscardsConnection) {
+TEST(DatabaseBrokenConn, MidStreamFetchBlockConnectionErrorDiscardsConnection) {
     MockCliDriver driver;
     PoolConfig cfg = noThread();
     cfg.min = 1;
     cfg.max = 1;
     driver.resultSets.push_back(idName(1, "a"));
-    driver.getColumnError = connError();
-    driver.failGetColumnOnCall = 1;  // connection drops during the first column read
+    driver.fetchBlockError = connError();
+    driver.failFetchBlockOnCall = 1;  // first fetchBlock call fails
     auto db = Database::open(driver, "X", cfg).value();
     {
         auto qr = db.query("SELECT id, name FROM t");
         ASSERT_TRUE(qr.ok());
+        int rows = 0;
         for (auto& row : qr.value()) {
-            auto cell = row.try_as<std::int64_t, std::string>();
-            EXPECT_FALSE(cell.ok());
-            EXPECT_EQ(cell.error().code, halcyon::ErrorCode::Connection);
+            (void)row;
+            ++rows;
         }
-        // The getColumn failure must be recorded on the ResultSet (not merely
-        // returned to the caller) so the dead connection can be discarded.
+        EXPECT_EQ(rows, 0);
+        // The fetchBlock failure must be recorded so the dead connection is discarded.
         ASSERT_FALSE(qr.value().ok());
         ASSERT_TRUE(qr.value().error().has_value());
         EXPECT_EQ(qr.value().error()->code, halcyon::ErrorCode::Connection);
@@ -370,9 +370,15 @@ TEST(DatabaseBrokenConn, MidStreamFetchConnectionErrorDiscardsConnection) {
     PoolConfig cfg = noThread();
     cfg.min = 1;
     cfg.max = 1;
-    driver.resultSets.push_back(idName(1, "a"));
-    driver.fetchError = connError();
-    driver.failFetchOnCall = 1;  // first fetch (during iteration) fails
+    driver.resultSets.push_back(MockCliDriver::ScriptedRows{
+        {"id", "name"},
+        {{halcyon::detail::cli::Value{std::int64_t{1}},
+          halcyon::detail::cli::Value{std::string{"a"}}},
+         {halcyon::detail::cli::Value{std::int64_t{2}},
+          halcyon::detail::cli::Value{std::string{"b"}}}}});
+    driver.fetchBlockSize = 1;  // one row per block
+    driver.fetchBlockError = connError();
+    driver.failFetchBlockOnCall = 2;  // second fetchBlock (after first row) fails
     auto db = Database::open(driver, "X", cfg).value();
     {
         auto qr = db.query("SELECT id, name FROM t");
@@ -382,7 +388,7 @@ TEST(DatabaseBrokenConn, MidStreamFetchConnectionErrorDiscardsConnection) {
             (void)row;
             ++rows;
         }
-        EXPECT_EQ(rows, 0);
+        EXPECT_EQ(rows, 1);
         ASSERT_FALSE(qr.value().ok());
         ASSERT_TRUE(qr.value().error().has_value());
         EXPECT_EQ(qr.value().error()->code, halcyon::ErrorCode::Connection);

@@ -33,7 +33,9 @@ observability via `prometheus-cpp` (metrics) and `opentelemetry-cpp` (tracing).
 
 - Per-connection prepared-statement LRU cache (single prepared statements are
   still core; only the *cache* is deferred).
-- Large-result streaming / server-side cursors.
+- Large-result *scrollable* cursors. (Forward block fetch now backs the read
+  path — see `docs/superpowers/specs/2026-06-28-halcyon-rowset-fetch-design.md` —
+  but scrollable/positionable cursors remain deferred.)
 - LOB (BLOB/CLOB) streaming.
 - Pluggable structured logging interface separate from OTel.
 - Standalone pool health-stats accessor (pool stats are surfaced via metrics).

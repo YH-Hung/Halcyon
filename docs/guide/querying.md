@@ -3,8 +3,9 @@
 ## `query` — streaming cursor
 
 `Database::query` opens a forward-only cursor. The returned `QueryResult` owns both
-the cursor and the pooled connection lease for its lifetime. Rows are read lazily
-one at a time.
+the cursor and the pooled connection lease for its lifetime. Rows are read from the
+server in blocks (see [How rows arrive](#how-rows-arrive-block-fetch)) and surfaced
+to you one row at a time.
 
 ```cpp
 auto res = db.queryOrThrow(
@@ -15,6 +16,22 @@ for (auto& row : res) {
     std::cout << id << " " << name << " " << score << "\n";
 }
 ```
+
+## How rows arrive (block fetch)
+
+Reads use Db2 CLI **rowset (block) fetch**: columns are bound once and the driver
+fills a block of rows per round-trip, so `query`/`queryAs` collapse what would be
+per-row, per-column CLI calls into a handful of fetches. This is transparent — the
+API is unchanged. A result set that contains a large object (`CLOB`/`BLOB`/`LONG
+VARCHAR`/very wide `VARCHAR`) transparently falls back to a row-at-a-time read for
+correctness; everything else uses the fast path.
+
+Because a streaming `QueryResult` keeps its cursor open, it holds a read lock on the
+underlying table — most visibly for LOB columns, where the cursor stays open until
+you finish. Destroy the `QueryResult` (let it leave scope) before issuing DDL such
+as `DROP`/`ALTER` on the same table, or the DDL will block on the cursor's lock.
+
+## `query` — lifetime
 
 **Lifetime rule:** the pooled connection is held until `QueryResult` is destroyed.
 Release it promptly — store results in a `std::vector` if you need them long-term.

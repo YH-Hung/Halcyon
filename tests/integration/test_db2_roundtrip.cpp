@@ -466,3 +466,162 @@ TEST(Db2ArrayBinding, MultiChunkInsertExceedsByteBudget) {
 
     h.execute("DROP TABLE halcyon_arr_big");
 }
+
+// --- Rowset (block) fetch (Task 4) ---
+namespace {
+struct RowsetRow {
+    std::int64_t id;
+    std::string name;
+    std::optional<std::int64_t> qty;
+};
+struct CountRow {
+    std::int64_t c;
+};
+struct U32Row {
+    std::int64_t id;
+    std::string s;
+};
+}  // namespace
+HALCYON_REFLECT(RowsetRow, id, name, qty);
+HALCYON_REFLECT(CountRow, c);
+HALCYON_REFLECT(U32Row, id, s);
+
+TEST(Db2RowsetFetch, MultiBlockSelectPreservesOrderValuesAndNulls) {
+    auto d = dsn();
+    if (!d) GTEST_SKIP() << "HALCYON_TEST_DSN not set; skipping live Db2 test";
+    auto dbh = halcyon::Database::open(*d);
+    ASSERT_TRUE(dbh.ok()) << dbh.error().message;
+    auto& h = dbh.value();
+    h.execute("DROP TABLE halcyon_rowset");
+    ASSERT_TRUE(h.execute(
+                     "CREATE TABLE halcyon_rowset(id BIGINT NOT NULL, "
+                     "name VARCHAR(32), qty BIGINT)")
+                    .ok());
+
+    const std::int64_t kRows = 10000;  // > one block: forces multiple fetches
+    std::vector<std::tuple<std::int64_t, std::string>> seed;
+    seed.reserve(kRows);
+    for (std::int64_t i = 0; i < kRows; ++i)
+        seed.emplace_back(i, "name-" + std::to_string(i));
+    ASSERT_TRUE(h.executeBatch(
+                     "INSERT INTO halcyon_rowset(id,name) VALUES (?,?)",
+                     halcyon::batchOf(seed))
+                    .ok());
+
+    auto rows = h.queryAsOrThrow<RowsetRow>(
+        "SELECT id, name, qty FROM halcyon_rowset ORDER BY id");
+    ASSERT_EQ(rows.size(), static_cast<std::size_t>(kRows));
+    for (std::int64_t i = 0; i < kRows; ++i) {
+        EXPECT_EQ(rows[static_cast<std::size_t>(i)].id, i);
+        EXPECT_EQ(rows[static_cast<std::size_t>(i)].name,
+                  "name-" + std::to_string(i));
+        EXPECT_FALSE(rows[static_cast<std::size_t>(i)].qty.has_value());  // all NULL
+    }
+    h.execute("DROP TABLE halcyon_rowset");
+}
+
+TEST(Db2RowsetFetch, LongColumnFallbackMatchesBoundedProjection) {
+    auto d = dsn();
+    if (!d) GTEST_SKIP() << "HALCYON_TEST_DSN not set; skipping live Db2 test";
+    auto dbh = halcyon::Database::open(*d);
+    ASSERT_TRUE(dbh.ok()) << dbh.error().message;
+    auto& h = dbh.value();
+    h.execute("DROP TABLE halcyon_lob");
+    ASSERT_TRUE(h.execute(
+                     "CREATE TABLE halcyon_lob(id BIGINT NOT NULL, body CLOB)")
+                    .ok());
+    const std::string body(5000, 'z');
+    ASSERT_TRUE(h.execute("INSERT INTO halcyon_lob(id, body) VALUES (?, ?)",
+                          std::int64_t{1}, body)
+                    .ok());
+
+    // Bounded projection: rowset path. Same rows via the CLOB: fallback path.
+    auto bounded = h.queryAsOrThrow<CountRow>(
+        "SELECT COUNT(*) AS c FROM halcyon_lob");
+    EXPECT_EQ(bounded[0].c, 1);
+
+    // The fallback path must return the full CLOB byte-identically. Scope the
+    // QueryResult so its cursor closes (releasing the table lock) before the
+    // DROP below; an open cursor on a LOB column otherwise blocks the DDL.
+    int seen = 0;
+    {
+        auto rs = h.query("SELECT id, body FROM halcyon_lob ORDER BY id");
+        ASSERT_TRUE(rs.ok()) << rs.error().message;
+        for (auto& row : rs.value()) {
+            auto [id, got] = row.as<std::int64_t, std::string>();
+            EXPECT_EQ(id, 1);
+            EXPECT_EQ(got, body);  // 5000 chars, intact through fallback
+            ++seen;
+        }
+        EXPECT_TRUE(rs.value().ok());
+    }
+    EXPECT_EQ(seen, 1);
+    h.execute("DROP TABLE halcyon_lob");
+}
+
+TEST(Db2RowsetFetch, AllScalarTypesRoundTripThroughBlock) {
+    auto d = dsn();
+    if (!d) GTEST_SKIP() << "HALCYON_TEST_DSN not set; skipping live Db2 test";
+    auto dbh = halcyon::Database::open(*d);
+    ASSERT_TRUE(dbh.ok()) << dbh.error().message;
+    auto& h = dbh.value();
+    h.execute("DROP TABLE halcyon_types");
+    ASSERT_TRUE(h.execute(
+                     "CREATE TABLE halcyon_types(i BIGINT, d DOUBLE, s VARCHAR(16), "
+                     "b VARCHAR(8) FOR BIT DATA, n BIGINT)")
+                    .ok());
+    std::vector<std::byte> bytes = {std::byte{0x00}, std::byte{0xFF},
+                                    std::byte{0x10}};
+    ASSERT_TRUE(h.execute(
+                     "INSERT INTO halcyon_types(i,d,s,b,n) VALUES (?,?,?,?,?)",
+                     std::int64_t{42}, 3.5, std::string{"hi"}, bytes,
+                     std::optional<std::int64_t>{})
+                    .ok());
+
+    auto rs = h.query("SELECT i, d, s, b, n FROM halcyon_types");
+    ASSERT_TRUE(rs.ok());
+    int seen = 0;
+    for (auto& row : rs.value()) {
+        auto [i, dd, s, b, n] = row.as<std::int64_t, double, std::string,
+                                       std::vector<std::byte>,
+                                       std::optional<std::int64_t>>();
+        EXPECT_EQ(i, 42);
+        EXPECT_DOUBLE_EQ(dd, 3.5);
+        EXPECT_EQ(s, "hi");
+        EXPECT_EQ(b, bytes);          // embedded 0x00 preserved
+        EXPECT_FALSE(n.has_value());  // NULL via indicator
+        ++seen;
+    }
+    EXPECT_EQ(seen, 1);
+    h.execute("DROP TABLE halcyon_types");
+}
+
+TEST(Db2RowsetFetch, MultiByteUtf8ValueRoundTripsThroughBlock) {
+    auto d = dsn();
+    if (!d) GTEST_SKIP() << "HALCYON_TEST_DSN not set; skipping live Db2 test";
+    auto dbh = halcyon::Database::open(*d);
+    ASSERT_TRUE(dbh.ok()) << dbh.error().message;
+    auto& h = dbh.value();
+    h.execute("DROP TABLE halcyon_u32");
+    // A multi-byte UTF-8 value whose byte length exceeds its character count must
+    // round-trip through the rowset path whole. The driver sizes the bind buffer
+    // by octet (byte) length — not the character-count colSize — and the transpose
+    // clamps the copy to the buffer, so a wide value is never truncated and a
+    // server that truncated could never drive a buffer over-read.
+    ASSERT_TRUE(
+        h.execute("CREATE TABLE halcyon_u32(id BIGINT NOT NULL, s VARCHAR(64))")
+            .ok());
+    const std::string multi =  // 8 x U+00E9 (é), 2 bytes each = 16 bytes
+        "\xC3\xA9\xC3\xA9\xC3\xA9\xC3\xA9\xC3\xA9\xC3\xA9\xC3\xA9\xC3\xA9";
+    ASSERT_EQ(multi.size(), 16u);
+    ASSERT_TRUE(h.execute("INSERT INTO halcyon_u32(id, s) VALUES (?, ?)",
+                          std::int64_t{1}, multi)
+                    .ok());
+
+    // queryAs -> all columns bounded -> rowset path.
+    auto rows = h.queryAsOrThrow<U32Row>("SELECT id, s FROM halcyon_u32");
+    ASSERT_EQ(rows.size(), 1u);
+    EXPECT_EQ(rows[0].s.size(), 16u);
+    EXPECT_EQ(rows[0].s, multi);
+    h.execute("DROP TABLE halcyon_u32");
+}

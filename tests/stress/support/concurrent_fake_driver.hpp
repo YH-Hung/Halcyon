@@ -150,21 +150,18 @@ public:
         return Result<std::string>(std::string{"c0"});
     }
 
-    Result<bool> fetch(StatementHandle stmt) override {
+    Result<std::vector<std::vector<Value>>> fetchBlock(
+        StatementHandle stmt, std::size_t maxRows) override {
+        (void)maxRows;
         std::lock_guard<std::mutex> lk(mu_);
         auto it = stmts_.find(stmt);
-        if (it == stmts_.end() || !live_.count(it->second.conn))
-            return stale<bool>();
-        ++it->second.position;
-        return Result<bool>(it->second.position < 1);  // exactly one row
-    }
-
-    Result<Value> getColumn(StatementHandle stmt, std::size_t index) override {
-        std::lock_guard<std::mutex> lk(mu_);
-        auto it = stmts_.find(stmt);
-        if (it == stmts_.end() || it->second.position != 0 || index != 0)
-            return mapping<Value>();
-        return Result<Value>(Value{encoded_value(it->second.sql)});
+        if (it == stmts_.end()) return mapping<std::vector<std::vector<Value>>>();
+        std::vector<std::vector<Value>> out;
+        if (it->second.position < 0) {  // single row, once
+            it->second.position = 0;
+            out.push_back({Value{encoded_value(it->second.sql)}});
+        }
+        return Result<std::vector<std::vector<Value>>>(std::move(out));
     }
 
     Result<void> finalize(StatementHandle stmt) override {

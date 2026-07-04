@@ -1,9 +1,11 @@
 #include <sqlcli1.h>
 
+#include <algorithm>
 #include <cstddef>
 #include <cstring>
 #include <map>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -141,7 +143,7 @@ public:
         }
         std::lock_guard<std::mutex> lk(mu_);
         auto h = static_cast<StatementHandle>(++nextStmt_);
-        stmts_[h] = StmtState{s, {}};
+        stmts_[h] = StmtState{s, {}, std::nullopt, false};
         return h;
     }
 
@@ -219,6 +221,8 @@ public:
         if (!cli_ok(rc) && rc != SQL_NO_DATA)
             return make_error(SQL_HANDLE_STMT, h, ErrorCode::Unknown,
                               "SQLExecute failed");
+        st->cols.reset();  // a fresh execute invalidates any cached describe
+        st->blockFallback = false;
         SQLLEN rows = 0;
         SQLRowCount(h, &rows);
         return static_cast<std::int64_t>(rows < 0 ? 0 : rows);
@@ -229,6 +233,10 @@ public:
         const std::vector<std::vector<Value>>& rows) override {
         StmtState* stp = stmt_state(stmt);
         if (!stp) return unknown_stmt();
+        // Re-binding for a batch execute invalidates any cached column describe
+        // from a prior result-set use of this (cached) statement handle.
+        stp->cols.reset();
+        stp->blockFallback = false;
         SQLHSTMT h = stp->handle;
         const std::size_t nRows = rows.size();
         if (nRows == 0) return std::int64_t{0};
@@ -434,67 +442,16 @@ public:
                            static_cast<std::size_t>(nameLen));
     }
 
-    Result<bool> fetch(StatementHandle stmt) override {
+    Result<std::vector<std::vector<Value>>> fetchBlock(
+        StatementHandle stmt, std::size_t maxRows) override {
         StmtState* st = stmt_state(stmt);
         if (!st) return unknown_stmt();
-        SQLRETURN rc = SQLFetch(st->handle);
-        if (rc == SQL_NO_DATA) return false;
-        if (!cli_ok(rc))
-            return make_error(SQL_HANDLE_STMT, st->handle, ErrorCode::Unknown,
-                              "SQLFetch failed");
-        return true;
-    }
-
-    Result<Value> getColumn(StatementHandle stmt, std::size_t index) override {
-        StmtState* st = stmt_state(stmt);
-        if (!st) return unknown_stmt();
-        SQLHSTMT h = st->handle;
-        SQLUSMALLINT col = static_cast<SQLUSMALLINT>(index + 1);
-        SQLCHAR name[1] = {0};
-        SQLSMALLINT nameLen = 0, sqlType = 0, nullable = 0;
-        SQLULEN colSize = 0;
-        SQLSMALLINT scale = 0;
-        if (!cli_ok(SQLDescribeCol(h, col, name, sizeof(name), &nameLen,
-                                   &sqlType, &colSize, &scale, &nullable)))
-            return make_error(SQL_HANDLE_STMT, h, ErrorCode::Unknown,
-                              "SQLDescribeCol failed");
-
-        switch (sqlType) {
-            case SQL_SMALLINT:
-            case SQL_INTEGER:
-            case SQL_BIGINT: {
-                SQLBIGINT v = 0;
-                SQLLEN ind = 0;
-                if (!cli_ok(SQLGetData(h, col, SQL_C_SBIGINT, &v, sizeof(v),
-                                       &ind)))
-                    return make_error(SQL_HANDLE_STMT, h, ErrorCode::Unknown,
-                                      "SQLGetData int failed");
-                if (ind == SQL_NULL_DATA) return Value{Null{}};
-                return Value{static_cast<std::int64_t>(v)};
-            }
-            case SQL_REAL:
-            case SQL_FLOAT:
-            case SQL_DOUBLE: {
-                double v = 0;
-                SQLLEN ind = 0;
-                if (!cli_ok(SQLGetData(h, col, SQL_C_DOUBLE, &v, sizeof(v),
-                                       &ind)))
-                    return make_error(SQL_HANDLE_STMT, h, ErrorCode::Unknown,
-                                      "SQLGetData double failed");
-                if (ind == SQL_NULL_DATA) return Value{Null{}};
-                return Value{v};
-            }
-            case SQL_BINARY:
-            case SQL_VARBINARY:
-            case SQL_LONGVARBINARY:
-            case SQL_BLOB:
-                // Raw bytes: read as SQL_C_BINARY so embedded NULs survive
-                // (a SQL_C_CHAR read would truncate at the first 0x00).
-                return get_binary(h, col);
-            default:
-                // CHAR/VARCHAR/DECIMAL/NUMERIC/TIMESTAMP/DATE/TIME → UTF-8 string.
-                return get_string(h, col);
+        if (maxRows == 0) return std::vector<std::vector<Value>>{};
+        if (!st->cols) {
+            if (auto d = describe_columns(st); !d.ok()) return d.error();
         }
+        return st->blockFallback ? fetch_block_fallback(st, maxRows)
+                                 : fetch_block_rowset(st, maxRows);
     }
 
     Result<void> finalize(StatementHandle stmt) override {
@@ -519,6 +476,8 @@ public:
         if (!cli_ok(rc))
             return make_error(SQL_HANDLE_STMT, st->handle, ErrorCode::Unknown,
                               "SQLFreeStmt(SQL_CLOSE) failed");
+        st->cols.reset();  // cursor closed -> re-describe on next fetch
+        st->blockFallback = false;
         return Result<void>();
     }
 
@@ -542,9 +501,17 @@ public:
     }
 
 private:
+    struct ColMeta {
+        SQLSMALLINT sqlType = 0;
+        SQLSMALLINT cType = SQL_C_CHAR;
+        SQLLEN bindWidth = 0;  // fixed size, or buffer width for var columns
+        bool bounded = true;
+    };
     struct StmtState {
         SQLHSTMT handle;
         std::vector<BoundParam> bound;
+        std::optional<std::vector<ColMeta>> cols;  // described once per cursor
+        bool blockFallback = false;
     };
 
     static Error make_conn_error(const char* msg) {
@@ -561,6 +528,309 @@ private:
         e.code = ErrorCode::Unknown;
         e.message = "unknown statement handle";
         return e;
+    }
+
+    // One-row cursor advance (was the body of fetch()).
+    Result<bool> fetch_row(SQLHSTMT h) {
+        SQLRETURN rc = SQLFetch(h);
+        if (rc == SQL_NO_DATA) return false;
+        if (!cli_ok(rc))
+            return make_error(SQL_HANDLE_STMT, h, ErrorCode::Unknown,
+                              "SQLFetch failed");
+        return true;
+    }
+
+    static constexpr std::size_t kMaxBoundColBytes = 64u * 1024;
+
+    // Reads the current row's 0-based column as a neutral Value using the cached
+    // column SQL type (no per-cell SQLDescribeCol). Used by the fallback path.
+    Result<Value> read_column_typed(SQLHSTMT h, std::size_t index,
+                                    SQLSMALLINT sqlType) {
+        SQLUSMALLINT col = static_cast<SQLUSMALLINT>(index + 1);
+        switch (sqlType) {
+            case SQL_SMALLINT:
+            case SQL_INTEGER:
+            case SQL_BIGINT: {
+                SQLBIGINT v = 0;
+                SQLLEN ind = 0;
+                if (!cli_ok(SQLGetData(h, col, SQL_C_SBIGINT, &v, sizeof(v), &ind)))
+                    return make_error(SQL_HANDLE_STMT, h, ErrorCode::Unknown,
+                                      "SQLGetData int failed");
+                if (ind == SQL_NULL_DATA) return Value{Null{}};
+                return Value{static_cast<std::int64_t>(v)};
+            }
+            case SQL_BIT: {
+                SQLCHAR v = 0;
+                SQLLEN ind = 0;
+                if (!cli_ok(SQLGetData(h, col, SQL_C_BIT, &v, sizeof(v), &ind)))
+                    return make_error(SQL_HANDLE_STMT, h, ErrorCode::Unknown,
+                                      "SQLGetData bit failed");
+                if (ind == SQL_NULL_DATA) return Value{Null{}};
+                return Value{static_cast<std::int64_t>(v ? 1 : 0)};
+            }
+            case SQL_REAL:
+            case SQL_FLOAT:
+            case SQL_DOUBLE: {
+                double v = 0;
+                SQLLEN ind = 0;
+                if (!cli_ok(SQLGetData(h, col, SQL_C_DOUBLE, &v, sizeof(v), &ind)))
+                    return make_error(SQL_HANDLE_STMT, h, ErrorCode::Unknown,
+                                      "SQLGetData double failed");
+                if (ind == SQL_NULL_DATA) return Value{Null{}};
+                return Value{v};
+            }
+            case SQL_BINARY:
+            case SQL_VARBINARY:
+            case SQL_LONGVARBINARY:
+            case SQL_BLOB:
+                return get_binary(h, col);
+            default:
+                return get_string(h, col);
+        }
+    }
+
+    // Describes every result column once and caches type/width/bounded on the
+    // statement. bounded=false (long/LOB or unknown/over-cap width) routes the
+    // whole statement onto the per-row fallback.
+    Result<void> describe_columns(StmtState* st) {
+        SQLHSTMT h = st->handle;
+        SQLSMALLINT n = 0;
+        if (!cli_ok(SQLNumResultCols(h, &n)))
+            return make_error(SQL_HANDLE_STMT, h, ErrorCode::Unknown,
+                              "SQLNumResultCols failed");
+        std::vector<ColMeta> cols(n < 0 ? 0 : static_cast<std::size_t>(n));
+        bool anyUnbounded = false;
+        for (std::size_t c = 0; c < cols.size(); ++c) {
+            SQLCHAR name[1] = {0};
+            SQLSMALLINT nameLen = 0, sqlType = 0, nullable = 0;
+            SQLULEN colSize = 0;
+            SQLSMALLINT scale = 0;
+            if (!cli_ok(SQLDescribeCol(h, static_cast<SQLUSMALLINT>(c + 1), name,
+                                       sizeof(name), &nameLen, &sqlType, &colSize,
+                                       &scale, &nullable)))
+                return make_error(SQL_HANDLE_STMT, h, ErrorCode::Unknown,
+                                  "SQLDescribeCol failed");
+            ColMeta m;
+            m.sqlType = sqlType;
+            // SQLDescribeCol's colSize is the declared length in *units*; for a
+            // CODEUNITS32 / multi-byte character column that is fewer than the
+            // byte length, so binding a colSize-sized buffer would let the server
+            // truncate a wide value while the indicator still reports its full
+            // byte length -> a buffer over-read in the transpose. SQL_DESC_
+            // OCTET_LENGTH gives the byte length; bind to the larger of the two.
+            // Text-rendered types (DECIMAL/DATE/TIME/TIMESTAMP) report a small
+            // octet length, so colSize (display width) governs there.
+            SQLLEN octet = 0;
+            SQLColAttribute(h, static_cast<SQLUSMALLINT>(c + 1),
+                            SQL_DESC_OCTET_LENGTH, nullptr, 0, nullptr, &octet);
+            const SQLLEN dataWidth =
+                std::max<SQLLEN>(static_cast<SQLLEN>(colSize), octet);
+            switch (sqlType) {
+                case SQL_SMALLINT:
+                case SQL_INTEGER:
+                case SQL_BIGINT:
+                    m.cType = SQL_C_SBIGINT;
+                    m.bindWidth = sizeof(SQLBIGINT);
+                    break;
+                case SQL_REAL:
+                case SQL_FLOAT:
+                case SQL_DOUBLE:
+                    m.cType = SQL_C_DOUBLE;
+                    m.bindWidth = sizeof(double);
+                    break;
+                case SQL_BIT:
+                    m.cType = SQL_C_BIT;
+                    m.bindWidth = 1;
+                    break;
+                case SQL_BINARY:
+                case SQL_VARBINARY:
+                    m.cType = SQL_C_BINARY;
+                    m.bindWidth = dataWidth;
+                    break;
+                case SQL_LONGVARBINARY:
+                case SQL_BLOB:
+                case SQL_CLOB:
+                case SQL_DBCLOB:
+                case SQL_LONGVARCHAR:
+                    m.bounded = false;  // long/LOB -> per-statement fallback
+                    break;
+                default:  // CHAR/VARCHAR/DECIMAL/NUMERIC/DATE/TIME/TIMESTAMP -> text
+                    m.cType = SQL_C_CHAR;
+                    m.bindWidth = dataWidth + 1;  // +1 for NUL
+                    break;
+            }
+            if (m.bounded &&
+                (m.bindWidth <= 0 ||
+                 static_cast<std::size_t>(m.bindWidth) > kMaxBoundColBytes))
+                m.bounded = false;  // unknown or too-wide -> fallback
+            anyUnbounded = anyUnbounded || !m.bounded;
+            cols[c] = m;
+        }
+        st->cols = std::move(cols);
+        st->blockFallback = anyUnbounded;
+        return Result<void>();
+    }
+
+    // Restores single-row state so a cached statement is clean for later reuse.
+    static void reset_rowset(SQLHSTMT h) {
+        SQLFreeStmt(h, SQL_UNBIND);
+        SQLSetStmtAttr(  // NOLINT(performance-no-int-to-ptr)
+            h, SQL_ATTR_ROW_ARRAY_SIZE,
+            reinterpret_cast<SQLPOINTER>(static_cast<SQLULEN>(1)), 0);
+        SQLSetStmtAttr(h, SQL_ATTR_ROW_STATUS_PTR, nullptr, 0);
+        SQLSetStmtAttr(h, SQL_ATTR_ROWS_FETCHED_PTR, nullptr, 0);
+    }
+
+    // Per-row fallback for long/LOB statements: identical Value output to the
+    // rowset path, using the cached column SQL type.
+    Result<std::vector<std::vector<Value>>> fetch_block_fallback(
+        StmtState* st, std::size_t maxRows) {
+        const auto& cols = *st->cols;
+        std::vector<std::vector<Value>> out;
+        while (out.size() < maxRows) {
+            auto f = fetch_row(st->handle);
+            if (!f.ok()) return f.error();
+            if (!f.value()) break;  // clean end of cursor
+            std::vector<Value> row;
+            row.reserve(cols.size());
+            for (std::size_t c = 0; c < cols.size(); ++c) {
+                auto v = read_column_typed(st->handle, c, cols[c].sqlType);
+                if (!v.ok()) return v.error();
+                row.push_back(std::move(v.value()));
+            }
+            out.push_back(std::move(row));
+        }
+        return out;
+    }
+
+    // Column-wise rowset binding for all-bounded statements: bind once, one
+    // SQLFetch fills a block of up to R rows, transpose to Values, then restore
+    // single-row state so the cached handle is clean for later reuse. Consecutive
+    // calls continue the same open cursor (each returns the next block; an empty
+    // block signals end).
+    Result<std::vector<std::vector<Value>>> fetch_block_rowset(
+        StmtState* st, std::size_t maxRows) {
+        SQLHSTMT h = st->handle;
+        const auto& cols = *st->cols;
+        const std::size_t nCols = cols.size();
+
+        std::size_t perRow = 0;
+        for (const auto& m : cols) perRow += static_cast<std::size_t>(m.bindWidth);
+        constexpr std::size_t kFetchBlockBytes = 2u * 1024 * 1024;
+        constexpr std::size_t kMaxBlockRows = 4096;
+        std::size_t R = perRow == 0 ? kMaxBlockRows : (kFetchBlockBytes / perRow);
+        if (R < 1) R = 1;
+        if (R > kMaxBlockRows) R = kMaxBlockRows;
+        if (R > maxRows) R = maxRows;
+
+        // Column-wise buffers (int64-backed for 8-byte alignment) + indicators.
+        std::vector<std::vector<std::int64_t>> buf(nCols);
+        std::vector<std::vector<SQLLEN>> ind(nCols);
+        for (std::size_t c = 0; c < nCols; ++c) {
+            const std::size_t nbytes =
+                static_cast<std::size_t>(cols[c].bindWidth) * R;
+            buf[c].assign(
+                (nbytes + sizeof(std::int64_t) - 1) / sizeof(std::int64_t), 0);
+            ind[c].assign(R, 0);
+        }
+
+        SQLULEN rowsFetched = 0;
+        std::vector<SQLUSMALLINT> rowStatus(R, 0);
+        SQLSetStmtAttr(  // NOLINT(performance-no-int-to-ptr)
+            h, SQL_ATTR_ROW_BIND_TYPE,
+            reinterpret_cast<SQLPOINTER>(static_cast<SQLULEN>(SQL_BIND_BY_COLUMN)),
+            0);
+        SQLSetStmtAttr(  // NOLINT(performance-no-int-to-ptr)
+            h, SQL_ATTR_ROW_ARRAY_SIZE,
+            reinterpret_cast<SQLPOINTER>(static_cast<SQLULEN>(R)), 0);
+        SQLSetStmtAttr(h, SQL_ATTR_ROW_STATUS_PTR, rowStatus.data(), 0);
+        SQLSetStmtAttr(h, SQL_ATTR_ROWS_FETCHED_PTR, &rowsFetched, 0);
+
+        for (std::size_t c = 0; c < nCols; ++c) {
+            SQLRETURN rc = SQLBindCol(h, static_cast<SQLUSMALLINT>(c + 1),
+                                      cols[c].cType, buf[c].data(),
+                                      cols[c].bindWidth, ind[c].data());
+            if (!cli_ok(rc)) {
+                Error e = make_error(SQL_HANDLE_STMT, h, ErrorCode::Unknown,
+                                     "SQLBindCol (rowset) failed");
+                reset_rowset(h);
+                return e;
+            }
+        }
+
+        // A partial final block can arrive as SQL_NO_DATA with rowsFetched>0;
+        // only rowsFetched==0 is true end-of-cursor. Rows fetched in a partial
+        // block fall through to the transpose below.
+        SQLRETURN rc = SQLFetch(h);
+        if (rc == SQL_NO_DATA && rowsFetched == 0) {
+            reset_rowset(h);
+            return std::vector<std::vector<Value>>{};  // clean end of cursor
+        }
+        if (!cli_ok(rc) && rc != SQL_NO_DATA) {
+            Error e = make_error(SQL_HANDLE_STMT, h, ErrorCode::Unknown,
+                                 "SQLFetch (rowset) failed");
+            reset_rowset(h);
+            return e;
+        }
+
+        std::vector<std::vector<Value>> out;
+        out.reserve(static_cast<std::size_t>(rowsFetched));
+        for (std::size_t r = 0; r < static_cast<std::size_t>(rowsFetched); ++r) {
+            std::vector<Value> row;
+            row.reserve(nCols);
+            for (std::size_t c = 0; c < nCols; ++c) {
+                const char* base = reinterpret_cast<const char*>(buf[c].data());
+                const char* slot =
+                    base + static_cast<std::size_t>(cols[c].bindWidth) * r;
+                const SQLLEN li = ind[c][r];
+                if (li == SQL_NULL_DATA) {
+                    row.push_back(Value{Null{}});
+                    continue;
+                }
+                switch (cols[c].cType) {
+                    case SQL_C_SBIGINT: {
+                        SQLBIGINT v;
+                        std::memcpy(&v, slot, sizeof(v));
+                        row.push_back(Value{static_cast<std::int64_t>(v)});
+                        break;
+                    }
+                    case SQL_C_DOUBLE: {
+                        double v;
+                        std::memcpy(&v, slot, sizeof(v));
+                        row.push_back(Value{v});
+                        break;
+                    }
+                    case SQL_C_BIT:
+                        row.push_back(
+                            Value{static_cast<std::int64_t>(*slot ? 1 : 0)});
+                        break;
+                    case SQL_C_BINARY: {
+                        // Clamp to the bound width: a server that truncated the
+                        // value still reports its full byte length in li, so an
+                        // unclamped copy would over-read the buffer.
+                        const std::size_t n = std::min<std::size_t>(
+                            static_cast<std::size_t>(li),
+                            static_cast<std::size_t>(cols[c].bindWidth));
+                        row.push_back(Value{std::vector<std::byte>(
+                            reinterpret_cast<const std::byte*>(slot),
+                            reinterpret_cast<const std::byte*>(slot) + n)});
+                        break;
+                    }
+                    default: {  // SQL_C_CHAR text (string/decimal/date/time/ts)
+                        // Clamp to the data capacity (bindWidth-1, excluding the
+                        // NUL) for the same over-read reason as the binary case.
+                        const std::size_t n = std::min<std::size_t>(
+                            static_cast<std::size_t>(li),
+                            static_cast<std::size_t>(cols[c].bindWidth) - 1);
+                        row.push_back(Value{std::string(slot, n)});
+                        break;
+                    }
+                }
+            }
+            out.push_back(std::move(row));
+        }
+        reset_rowset(h);
+        return out;
     }
 
     // Locked lookups: copy a handle / grab a stable StmtState pointer under the

@@ -36,11 +36,11 @@ TEST(FakeDriverTest, SelectReturnsSqlEncodedValue) {
     ASSERT_TRUE(d.bindParams(s.value(), {}).ok());
     ASSERT_TRUE(d.execute(s.value()).ok());
     EXPECT_EQ(d.columnCount(s.value()).value(), 1u);
-    ASSERT_TRUE(d.fetch(s.value()).value());  // one row
-    auto col = d.getColumn(s.value(), 0);
-    ASSERT_TRUE(col.ok());
-    EXPECT_EQ(std::get<std::int64_t>(col.value()), 7);
-    EXPECT_FALSE(d.fetch(s.value()).value());  // end of cursor
+    auto blk = d.fetchBlock(s.value(), 100);
+    ASSERT_TRUE(blk.ok());
+    ASSERT_EQ(blk.value().size(), 1u);  // one row
+    EXPECT_EQ(std::get<std::int64_t>(blk.value()[0][0]), 7);
+    EXPECT_TRUE(d.fetchBlock(s.value(), 100).value().empty());  // end of cursor
 }
 
 TEST(FakeDriverTest, FailExecuteEveryTripsAtRate) {

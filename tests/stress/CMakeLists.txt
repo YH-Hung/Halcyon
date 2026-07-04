@@ -37,3 +37,9 @@ add_executable(halcyon_batch_insert_bench perf/batch_insert_bench.cpp)
 target_link_libraries(halcyon_batch_insert_bench PRIVATE halcyon::halcyon)
 target_compile_options(halcyon_batch_insert_bench PRIVATE -Wall -Wextra)
 halcyon_apply_sanitizer(halcyon_batch_insert_bench)
+
+# ---- Front-end #4: read-throughput (block fetch) benchmark (standalone; live Db2) ----
+add_executable(halcyon_select_bench perf/select_bench.cpp)
+target_link_libraries(halcyon_select_bench PRIVATE halcyon::halcyon)
+target_compile_options(halcyon_select_bench PRIVATE -Wall -Wextra)
+halcyon_apply_sanitizer(halcyon_select_bench)

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <deque>
@@ -168,38 +169,28 @@ public:
         return Result<std::string>(cols[index]);
     }
 
-    // --- fetch error injection ---
-    Error fetchError;
-    int failFetchOnCall = 0;  // 1-based fetch() call index to fail at; 0 = never
-    int fetchCalls = 0;
+    // --- block fetch scripting ---
+    std::size_t fetchBlockSize = 0;  // 0 => up to maxRows; >0 => cap per call
+    Error fetchBlockError;
+    int failFetchBlockOnCall = 0;  // 1-based fetchBlock() call to fail; 0=never
+    int fetchBlockCalls = 0;
 
-    Result<bool> fetch(StatementHandle stmt) override {
-        ++fetchCalls;
-        if (failFetchOnCall != 0 && fetchCalls == failFetchOnCall)
-            return Result<bool>(fetchError);
+    Result<std::vector<std::vector<Value>>> fetchBlock(
+        StatementHandle stmt, std::size_t maxRows) override {
+        ++fetchBlockCalls;
+        if (failFetchBlockOnCall != 0 && fetchBlockCalls == failFetchBlockOnCall)
+            return Result<std::vector<std::vector<Value>>>(fetchBlockError);
         auto& s = statements.at(stmt);
-        ++s.position;
-        return Result<bool>(s.position <
-                            static_cast<long>(s.cursor.rows.size()));
-    }
-
-    // --- getColumn error injection (e.g. a connection drop during SQLGetData) ---
-    Error getColumnError;
-    int failGetColumnOnCall = 0;  // 1-based getColumn() call index; 0 = never
-    int getColumnCalls = 0;
-
-    Result<Value> getColumn(StatementHandle stmt, std::size_t index) override {
-        ++getColumnCalls;
-        if (failGetColumnOnCall != 0 && getColumnCalls == failGetColumnOnCall)
-            return Result<Value>(getColumnError);
-        auto& s = statements.at(stmt);
-        if (s.position < 0 ||
-            s.position >= static_cast<long>(s.cursor.rows.size())) {
-            return Result<Value>(rangeError());
+        std::size_t cap = (fetchBlockSize != 0)
+                              ? std::min(maxRows, fetchBlockSize)
+                              : maxRows;
+        std::vector<std::vector<Value>> out;
+        const long n = static_cast<long>(s.cursor.rows.size());
+        while (out.size() < cap && s.position + 1 < n) {
+            ++s.position;
+            out.push_back(s.cursor.rows[static_cast<std::size_t>(s.position)]);
         }
-        const auto& row = s.cursor.rows[static_cast<std::size_t>(s.position)];
-        if (index >= row.size()) return Result<Value>(rangeError());
-        return Result<Value>(row[index]);
+        return Result<std::vector<std::vector<Value>>>(std::move(out));
     }
 
     Result<void> finalize(StatementHandle stmt) override {
