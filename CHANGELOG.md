@@ -5,12 +5,14 @@ All notable changes to Halcyon are documented here. The format is based on
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html) for its
 public C++ API (see "Versioning & compatibility" in the README).
 
-## [Unreleased]
+## Unreleased
 
-## [1.0.0] - 2026-07-01
+## 1.0.0 - 2026-07-01
 
-First stable release. Source-consumption ready via `find_package(Halcyon)` and
-CMake `FetchContent`.
+First stable source tree. Source-consumption ready via `find_package(Halcyon)`
+and CMake `FetchContent`. No GitHub Release or `v1.0.0` tag has been published
+yet; consumers should pin `main`, a reviewed commit, or a release tag once one
+exists.
 
 ### Added
 - High-level `Database` facade with OO/fluent and functional free-function styles.
@@ -30,6 +32,3 @@ CMake `FetchContent`.
   propagation), behind interfaces and CMake toggles; zero overhead when disabled.
 - CMake package: `find_package(Halcyon)` -> `halcyon::halcyon`, and `FetchContent`
   consumption.
-
-[Unreleased]: https://github.com/YH-Hung/Halcyon/compare/v1.0.0...HEAD
-[1.0.0]: https://github.com/YH-Hung/Halcyon/releases/tag/v1.0.0

@@ -6,7 +6,7 @@
 |---|---|
 | C++ standard | C++17 |
 | CMake | ≥ 3.20 |
-| IBM Db2 CLI driver | vendored at `third_party/clidriver`, or set `DB2_CLIDRIVER_ROOT` |
+| IBM Db2 CLI driver | user-supplied at `third_party/clidriver`, or set `DB2_CLIDRIVER_ROOT` |
 | GoogleTest | fetched automatically by CMake |
 
 ## Add Halcyon to your project

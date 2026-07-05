@@ -41,7 +41,7 @@ leak `sqlcli1.h` types into public headers.
 - `tests/unit/` — unit tests; mock the seam via `MockCliDriver` (no live DB).
 - `tests/integration/` — Dockerized Db2 tests (CTest label `integration`, opt-in).
 - `cmake/` — `FindDB2CLI.cmake` and package config.
-- `third_party/clidriver/` — vendored IBM Db2 CLI driver (gitignored).
+- `third_party/clidriver/` — user-supplied IBM Db2 CLI driver (gitignored).
 - `examples/`, `docker/` — usage samples and the Db2 compose for integration tests.
 
 ## Build & test
@@ -55,7 +55,7 @@ ctest --test-dir build --output-on-failure          # unit tests (mock the seam,
 Key CMake options: `HALCYON_WITH_PROMETHEUS`, `HALCYON_WITH_OTEL`,
 `HALCYON_BUILD_TESTS`, `HALCYON_BUILD_INTEGRATION_TESTS`, `HALCYON_BUILD_EXAMPLES`,
 `HALCYON_WARNINGS_AS_ERRORS`.
-The vendored driver is found at `third_party/clidriver`; override with
+The user-supplied driver is found at `third_party/clidriver`; override with
 `-DDB2_CLIDRIVER_ROOT=...`. The driver lib dir is added to the RPATH, so examples
 and tests run without setting `LD_LIBRARY_PATH`/`DYLD_LIBRARY_PATH`. On macOS,
 `FindDB2CLI.cmake` rewrites `libdb2.dylib`'s bare install name to
@@ -125,12 +125,12 @@ see `docker/README.md` for the full command. The key differences:
   never becomes connectable. Use **Docker** for integration tests on Apple
   silicon; Apple `container` works end-to-end only on amd64 hosts.
 
-**macOS one-time step (Gatekeeper / GSKit).** The vendored driver `dlopen`s its
+**macOS one-time step (Gatekeeper / GSKit).** The user-supplied driver `dlopen`s its
 IBM GSKit security libraries (`third_party/clidriver/lib/icc/libgsk8*.dylib`)
 during `connect`. Those binaries are unsigned and arrive with the
 `com.apple.quarantine` attribute, so Gatekeeper blocks the load and `connect`
 fails with `SQL1042C ... SQLSTATE=58004` (and Finder/XProtect flags
-`libgsk8sys.dylib` as malware). If you trust the source of your vendored driver,
+`libgsk8sys.dylib` as malware). If you trust the source of your user-supplied driver,
 clear quarantine once after fetching it (the files are read-only, so make them
 writable first):
 

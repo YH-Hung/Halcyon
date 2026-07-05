@@ -40,7 +40,7 @@ documentation site. It deliberately adds **no library features** and submits to
   Halcyon is a static, header-heavy library consumed from source; binary ABI
   stability is not promised.
 - **Versioned documentation** (e.g. MkDocs `mike`) — a single "latest" site only.
-- **Bundling the IBM Db2 CLI driver.** The vendored `clidriver` is proprietary
+- **Bundling the IBM Db2 CLI driver.** The IBM `clidriver` is proprietary
   and gitignored; it remains a user-supplied dependency in every consumption mode.
 
 ## 2. Decisions (locked)
@@ -196,7 +196,7 @@ target_link_libraries(my_app PRIVATE halcyon::halcyon)
 include(FetchContent)
 FetchContent_Declare(Halcyon
     GIT_REPOSITORY https://github.com/<owner>/Halcyon.git
-    GIT_TAG        v1.0.0)
+    GIT_TAG        main)
 FetchContent_MakeAvailable(Halcyon)
 target_link_libraries(my_app PRIVATE halcyon::halcyon)
 # Both modes require the consumer to provide the IBM Db2 CLI driver, e.g.

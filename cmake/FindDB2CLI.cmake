@@ -28,7 +28,7 @@ if(DB2CLI_FOUND AND NOT TARGET DB2::CLI)
     # Bake an RPATH so executables find libdb2 without LD_LIBRARY_PATH/DYLD_LIBRARY_PATH.
     set(DB2CLI_LIBRARY_DIR "${DB2_CLIDRIVER_ROOT}/lib" CACHE PATH "Db2 CLI lib dir")
 
-    # macOS: the vendored libdb2 ships with a bare install name ("libdb2.dylib").
+    # macOS: the local libdb2 ships with a bare install name ("libdb2.dylib").
     # dyld does not search RPATH for bare dependent names, so any executable that
     # links (even transitively) against it fails to load. Rewrite the install
     # name to be @rpath-relative (idempotent) so the baked RPATH resolves it.

@@ -6,7 +6,7 @@
 
 **Architecture:** A self-contained CMake project that consumes Halcyon via `find_package(Halcyon)` (not wired into the Halcyon build). Two executables (`orders_oo`, `orders_functional`) run identical seven-step logic over a shared `orders_model.hpp` (reflected structs + SQL strings). Schema and seed live in `.sql` scripts loaded into the existing `docker/docker-compose.yml` Db2 via a `load_sql.sh` helper. Verification is end-to-end against live Db2, per `AGENTS.md`.
 
-**Tech Stack:** C++17, Halcyon, CMake ≥ 3.20, IBM Db2 CLI (vendored `third_party/clidriver`), Docker Db2 (`icr.io/db2_community/db2`).
+**Tech Stack:** C++17, Halcyon, CMake ≥ 3.20, IBM Db2 CLI (user-supplied `third_party/clidriver`), Docker Db2 (`icr.io/db2_community/db2`).
 
 **Spec:** `docs/superpowers/specs/2026-06-22-halcyon-orders-sample-design.md`
 
@@ -19,7 +19,7 @@ This is a runnable sample, not a unit-tested library component, so the
 Treat a failing build or a non-zero exit / wrong output as a red test.
 
 Prerequisite for any task that builds or runs (Tasks 3, 7+): a built Halcyon
-tree (or install prefix) and the vendored driver. Define these shell variables
+tree (or install prefix) and the user-supplied driver. Define these shell variables
 once per session and reuse them:
 
 ```bash
@@ -206,7 +206,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # Consumes Halcyon as an installed/exported package. Configure with:
 #   -DCMAKE_PREFIX_PATH=<halcyon build-or-install tree>
 #   -DDB2_CLIDRIVER_ROOT=<halcyon repo>/third_party/clidriver
-# (the vendored-driver default root is relative to THIS project, so point it at
+# (the default driver default root is relative to THIS project, so point it at
 #  Halcyon's driver explicitly.)
 find_package(Halcyon REQUIRED)
 
@@ -662,7 +662,7 @@ transaction → re-query. Shared row structs and SQL live in
 
 - Docker (the repo's `docker/docker-compose.yml` provides Db2 `SAMPLE`).
 - A built Halcyon tree or install prefix.
-- The vendored CLI driver at `third_party/clidriver` (see the repo `AGENTS.md`;
+- The user-supplied CLI driver at `third_party/clidriver` (see the repo `AGENTS.md`;
   on macOS run the one-time `xattr -r -d com.apple.quarantine third_party/clidriver`).
 
 ## 1. Start Db2
@@ -706,7 +706,7 @@ cmake --build build -j
 ```
 
 `find_package(Halcyon)` needs `CMAKE_PREFIX_PATH` to point at a Halcyon build
-tree or install prefix. `DB2_CLIDRIVER_ROOT` must point at Halcyon's vendored
+tree or install prefix. `DB2_CLIDRIVER_ROOT` must point at local Halcyon
 driver, because the driver's default search root is relative to *this* project.
 Halcyon adds the driver lib dir to the RPATH, so no `DYLD_LIBRARY_PATH` /
 `LD_LIBRARY_PATH` is needed at run time.

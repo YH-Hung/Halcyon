@@ -480,8 +480,8 @@ CMake `FetchContent`.
 - CMake package: `find_package(Halcyon)` -> `halcyon::halcyon`, and `FetchContent`
   consumption.
 
-[Unreleased]: https://github.com/<owner>/Halcyon/compare/v1.0.0...HEAD
-[1.0.0]: https://github.com/<owner>/Halcyon/releases/tag/v1.0.0
+
+
 ```
 
 (Replace `<owner>` with the repository owner when the remote is known.)
@@ -502,7 +502,7 @@ Symbols under `detail::` are implementation details and may change in any releas
   stability is promised across versions.
 - The **IBM Db2 CLI driver (`clidriver`) is a user-supplied dependency** and is
   not redistributed by this project. Provide it via `DB2_CLIDRIVER_ROOT` (or the
-  vendored `third_party/clidriver`) in every consumption mode.
+  user-supplied `third_party/clidriver`) in every consumption mode.
 
 See [`CHANGELOG.md`](CHANGELOG.md) for the per-release history.
 ```
@@ -527,7 +527,7 @@ target_link_libraries(my_app PRIVATE halcyon::halcyon)
 include(FetchContent)
 FetchContent_Declare(Halcyon
     GIT_REPOSITORY https://github.com/<owner>/Halcyon.git
-    GIT_TAG        v1.0.0)
+    GIT_TAG        main)
 FetchContent_MakeAvailable(Halcyon)
 target_link_libraries(my_app PRIVATE halcyon::halcyon)
 ```

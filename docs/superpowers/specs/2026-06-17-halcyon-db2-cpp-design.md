@@ -46,7 +46,7 @@ observability via `prometheus-cpp` (metrics) and `opentelemetry-cpp` (tracing).
 
 | Topic | Decision |
 |---|---|
-| Underlying driver | IBM Db2 CLI (`sqlcli1.h`), vendored at `third_party/clidriver` |
+| Underlying driver | IBM Db2 CLI (`sqlcli1.h`), user-supplied at `third_party/clidriver` |
 | Platforms | Linux x86_64 + macOS |
 | Build | CMake + `find_package` (consumer-provided deps) |
 | Observability | Optional, behind interfaces, CMake toggles |
@@ -92,7 +92,7 @@ aware of IBM CLI specifics. Everything above the seam is portable, mockable C++1
 Halcyon/
 ├── CMakeLists.txt
 ├── cmake/                      # FindDB2CLI.cmake, package config, presets
-├── third_party/clidriver/     # vendored IBM Db2 CLI driver (provided)
+├── third_party/clidriver/     # user-supplied IBM Db2 CLI driver (provided)
 ├── include/halcyon/
 │   ├── halcyon.hpp             # umbrella header
 │   ├── database.hpp            # facade: Database (high-level entry)

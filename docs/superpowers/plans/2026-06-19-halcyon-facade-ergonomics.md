@@ -24,7 +24,7 @@ only `src/detail/cli/` sees `sqlcli1.h`; the whole facade is unit-tested against
 
 **Tech Stack:** C++17, CMake ≥ 3.20, GoogleTest (FetchContent, from Plan 1),
 `<future>`/`<thread>` for async (the Plan 3 `Executor`). No new third-party
-dependencies. The vendored IBM Db2 CLI driver is only touched by the (gated)
+dependencies. The user-supplied IBM Db2 CLI driver is only touched by the (gated)
 integration test and the new `Db2CliDriver` transaction methods.
 
 **Builds on (Plans 1–3, merged):**

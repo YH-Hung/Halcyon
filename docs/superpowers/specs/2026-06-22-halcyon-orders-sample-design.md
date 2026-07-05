@@ -209,7 +209,7 @@ Consumer notes (mirroring `tests/smoke/` and `HalcyonConfig.cmake.in`):
 
 - Configure with `-DCMAKE_PREFIX_PATH=<halcyon-install-or-build-tree>` so
   `find_package(Halcyon)` resolves.
-- Because the vendored-driver default root is relative to the *consumer's* source
+- Because the default driver default root is relative to the *consumer's* source
   tree, the consumer must point at Halcyon's driver:
   `-DDB2_CLIDRIVER_ROOT=<halcyon-repo>/third_party/clidriver` (or set
   `DB2CLI_INCLUDE_DIR`/`DB2CLI_LIBRARY`). Halcyon adds the driver lib dir to the
@@ -220,7 +220,7 @@ Consumer notes (mirroring `tests/smoke/` and `HalcyonConfig.cmake.in`):
 The README documents the complete essential procedure:
 
 1. **Prerequisites:** Docker (or Apple `container`), a built/installed Halcyon,
-   and the vendored CLI driver under `third_party/clidriver` (incl. the macOS
+   and the user-supplied CLI driver under `third_party/clidriver` (incl. the macOS
    one-time `xattr` quarantine clear from `AGENTS.md`/`docker/README.md`).
 2. **Start Db2:** `docker compose -f docker/docker-compose.yml up -d`; wait until
    `... ps` shows `healthy` (first boot creates `SAMPLE`).

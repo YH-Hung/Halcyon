@@ -18,7 +18,7 @@ default). Direct `Connection` construction defaults to capacity 0 (disabled),
 preserving the existing low-level prepare/finalize contract.
 
 **Tech Stack:** C++17, CMake ≥ 3.20, GoogleTest (existing harness), the existing
-`MockCliDriver` seam fake, the vendored IBM Db2 CLI driver for the gated
+`MockCliDriver` seam fake, the user-supplied IBM Db2 CLI driver for the gated
 integration suite.
 
 **Spec:** `docs/superpowers/specs/2026-06-21-halcyon-stmt-cache-design.md`

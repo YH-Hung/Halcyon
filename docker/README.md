@@ -33,8 +33,10 @@ ctest --test-dir build -L integration --output-on-failure
 docker compose -f docker/docker-compose.yml down
 ```
 
-`docker-compose.yml` runs the image `privileged` with `DBNAME=SAMPLE`,
-`DB2INST1_PASSWORD=halcyon`, and publishes port `50000`, matching the DSN above.
+`docker-compose.yml` runs the image `privileged` with `LICENSE=accept`,
+`DBNAME=SAMPLE`, `DB2INST1_PASSWORD=halcyon`, and publishes port `50000`,
+matching the DSN above. Only run this container if you accept IBM's applicable
+Db2 Community container/image license terms.
 
 ## Apple `container` (Docker alternative on macOS)
 

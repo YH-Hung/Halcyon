@@ -1,8 +1,9 @@
 name: Set up Db2 CLI driver
 description: >
   Fetch, verify, and cache the IBM Db2 CLI driver (clidriver) into
-  third_party/clidriver. The driver is IBM's redistributable (not part of this
-  repo, hence gitignored), so CI downloads it instead of vendoring it.
+  third_party/clidriver. The driver is an IBM-provided dependency (not part of
+  this repo, hence gitignored), so CI downloads it from IBM instead of
+  redistributing it.
 
 inputs:
   platform:

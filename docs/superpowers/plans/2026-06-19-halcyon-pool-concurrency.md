@@ -22,7 +22,7 @@ injected via `BackoffPolicy::sleep` (so backoff tests run instantly).
 
 **Tech Stack:** C++17, CMake ≥ 3.20, GoogleTest (FetchContent, from Plan 1),
 `<thread>`/`<mutex>`/`<condition_variable>`/`<future>` from the standard library.
-No new third-party dependencies. The vendored IBM Db2 CLI driver is only touched
+No new third-party dependencies. The user-supplied IBM Db2 CLI driver is only touched
 by the (gated) integration test.
 
 **Builds on (Plans 1–2, merged):** `include/halcyon/{version,error,result,types,

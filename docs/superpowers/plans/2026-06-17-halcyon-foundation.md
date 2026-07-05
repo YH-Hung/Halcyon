@@ -6,14 +6,14 @@
 
 **Architecture:** Layered design (Approach A). This plan delivers the bottom of the stack: a CMake project that builds a `halcyon::halcyon` library, a vendored `Result<T>`/`Error` model with a dual functional/throwing API, and an `ICliDriver` interface plus a `MockCliDriver` for unit tests. No `sqlcli1.h` code is written yet (that is Plan 2); this plan defines the seam it will plug into.
 
-**Tech Stack:** C++17, CMake ≥ 3.20, GoogleTest (via FetchContent for out-of-the-box test runs), IBM Db2 CLI driver vendored at `third_party/clidriver` (only referenced by the CMake find module here).
+**Tech Stack:** C++17, CMake ≥ 3.20, GoogleTest (via FetchContent for out-of-the-box test runs), IBM Db2 CLI driver supplied at `third_party/clidriver` (only referenced by the CMake find module here).
 
 ---
 
 ## File Structure (created by this plan)
 
 - `CMakeLists.txt` — top-level project, options, library target, test wiring.
-- `cmake/FindDB2CLI.cmake` — locates the vendored CLI driver (headers + `db2` lib).
+- `cmake/FindDB2CLI.cmake` — locates the user-supplied CLI driver (headers + `db2` lib).
 - `include/halcyon/version.hpp` — version constants.
 - `include/halcyon/error.hpp` — `ErrorCode`, `Error`, exception hierarchy, `throw_error`.
 - `include/halcyon/result.hpp` — `Result<T>` and `Result<void>`.
@@ -78,7 +78,7 @@ std::string_view version() noexcept {
 
 - [x] **Step 3: Write the DB2 CLI find module**
 
-Create `cmake/FindDB2CLI.cmake`. Defaults to the vendored driver, overridable via
+Create `cmake/FindDB2CLI.cmake`. Defaults to the user-supplied driver, overridable via
 `-DDB2_CLIDRIVER_ROOT=...`. Produces an imported target `DB2::CLI`.
 
 ```cmake
@@ -884,7 +884,7 @@ git commit -m "feat: add ICliDriver seam and MockCliDriver for unit testing"
 ## Self-Review
 
 **Spec coverage (Plan 1 scope):**
-- Build system (CMake + find_package, options, vendored `third_party/clidriver`, RPATH) → Task 1. ✔
+- Build system (CMake + find_package, options, user-supplied `third_party/clidriver`, RPATH) → Task 1. ✔
 - `Result<T>` + monadic helpers + dual throwing bridge → Task 3. ✔
 - `Error`/`ErrorCode`/exception hierarchy → Task 2. ✔
 - Mockable CLI seam (`ICliDriver` + `MockCliDriver`) enabling unit tests → Task 4. ✔

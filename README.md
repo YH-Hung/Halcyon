@@ -2,6 +2,11 @@
 
 A modern **C++17** client library for **IBM Db2**, built on the IBM Db2 CLI (`sqlcli1.h`). Halcyon provides a high-level, ergonomic, type-safe API in both object-oriented/fluent and functional styles — connection pooling, transparent reconnect, safe auto-retry on transient failures, `std::future` async, and optional observability via Prometheus and OpenTelemetry.
 
+Halcyon is an independent open-source project. It is not affiliated with,
+endorsed by, or sponsored by IBM. IBM and Db2 are trademarks of International
+Business Machines Corporation, and the IBM Db2 CLI driver is a separate
+user-supplied dependency governed by IBM's terms.
+
 ## Documentation
 
 - **Published docs:** https://yh-hung.github.io/Halcyon/
@@ -28,7 +33,7 @@ A modern **C++17** client library for **IBM Db2**, built on the IBM Db2 CLI (`sq
 |---|---|
 | C++ standard | C++17 |
 | CMake | ≥ 3.20 |
-| IBM Db2 CLI driver | vendored at `third_party/clidriver` (or override via `DB2_CLIDRIVER_ROOT`) |
+| IBM Db2 CLI driver | user-supplied at `third_party/clidriver` or via `DB2_CLIDRIVER_ROOT` |
 | Platforms | Linux x86_64, macOS |
 | Test framework | GoogleTest (fetched by CMake) |
 | Metrics (optional) | `prometheus-cpp` |
@@ -118,6 +123,9 @@ Configure with `-DHALCYON_BUILD_INTEGRATION_TESTS=ON` to build them.
 
 **Docker (default):**
 
+Starting this container sets `LICENSE=accept` for the IBM Db2 Community image.
+Only run it if you accept IBM's applicable container/image license terms.
+
 ```bash
 docker compose -f docker/docker-compose.yml up -d
 docker compose -f docker/docker-compose.yml ps   # wait for STATUS = healthy (~2 min)
@@ -186,7 +194,7 @@ target_link_libraries(my_app PRIVATE halcyon::halcyon)
 include(FetchContent)
 FetchContent_Declare(Halcyon
     GIT_REPOSITORY https://github.com/YH-Hung/Halcyon.git
-    GIT_TAG        v1.0.0)
+    GIT_TAG        main)  # or pin a reviewed commit / published release tag
 FetchContent_MakeAvailable(Halcyon)
 target_link_libraries(my_app PRIVATE halcyon::halcyon)
 ```
@@ -230,7 +238,7 @@ tests/
   integration/            Dockerized Db2 (CTest label "integration")
   stress/                 Concurrency correctness + perf harness (CTest label "stress")
 cmake/                    FindDB2CLI.cmake, package config
-third_party/clidriver/    Vendored IBM Db2 CLI driver (gitignored)
+third_party/clidriver/    User-supplied IBM Db2 CLI driver (gitignored)
 examples/                 OO and functional usage samples
 samples/orders/           Standalone consumer sample (find_package + local Db2)
 docker/                   Db2 Compose for integration tests
@@ -316,9 +324,17 @@ Symbols under `detail::` are implementation details and may change in any releas
   stability is promised across versions.
 - The **IBM Db2 CLI driver (`clidriver`) is a user-supplied dependency** and is
   not redistributed by this project. Provide it via `DB2_CLIDRIVER_ROOT` (or the
-  vendored `third_party/clidriver`) in every consumption mode.
+  local `third_party/clidriver`) in every consumption mode.
 
 See [`CHANGELOG.md`](CHANGELOG.md) for the per-release history.
+
+## Security & third-party notices
+
+- Report vulnerabilities through GitHub Security Advisories when available, or
+  contact the maintainer privately before public disclosure. See
+  [`SECURITY.md`](SECURITY.md).
+- Halcyon does not redistribute IBM Db2, the IBM Db2 CLI driver, or IBM
+  container images. See [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
 
 ## License
 

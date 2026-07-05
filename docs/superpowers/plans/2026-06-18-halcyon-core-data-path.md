@@ -18,7 +18,7 @@ reflection) converts C++ types ↔ `Value` and never sees `sqlcli1.h`. Only
 **invariant** from `AGENTS.md`: nothing above the seam references `sqlcli1.h`.
 
 **Tech Stack:** C++17, CMake ≥ 3.20, GoogleTest (FetchContent, from Plan 1), the
-vendored IBM Db2 CLI driver at `third_party/clidriver` (linked into the library
+user-supplied IBM Db2 CLI driver at `third_party/clidriver` (linked into the library
 for the first time in this plan via `DB2::CLI`), Docker for the gated integration
 suite.
 
