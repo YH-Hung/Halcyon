@@ -1,11 +1,14 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "halcyon/connection.hpp"
 #include "halcyon/error.hpp"
+#include "halcyon/isolation.hpp"
 #include "halcyon/parameters.hpp"
 #include "halcyon/result.hpp"
 
@@ -20,10 +23,14 @@ namespace halcyon {
 class Transaction {
 public:
     Transaction(Transaction&& o) noexcept
-        : conn_(o.conn_), active_(o.active_), poisoned_(o.poisoned_) {
+        : conn_(o.conn_),
+          active_(o.active_),
+          poisoned_(o.poisoned_),
+          restoreIsolation_(std::move(o.restoreIsolation_)) {
         o.conn_ = nullptr;
         o.active_ = false;
         o.poisoned_ = false;
+        o.restoreIsolation_.reset();
     }
     Transaction& operator=(Transaction&& o) noexcept {
         if (this != &o) {
@@ -31,9 +38,11 @@ public:
             conn_ = o.conn_;
             active_ = o.active_;
             poisoned_ = o.poisoned_;
+            restoreIsolation_ = std::move(o.restoreIsolation_);
             o.conn_ = nullptr;
             o.active_ = false;
             o.poisoned_ = false;
+            o.restoreIsolation_.reset();
         }
         return *this;
     }
@@ -90,18 +99,22 @@ public:
         auto c = conn_->driver().commit(conn_->handle());
         active_ = false;
         auto a = conn_->driver().setAutoCommit(conn_->handle(), true);
-        if (!c.ok() || !a.ok()) poison();  // dead conn or autocommit lost
+        auto i = restore_isolation();
+        if (!c.ok() || !a.ok() || !i.ok()) poison();  // dead conn or session state lost
         if (!c.ok()) return c;
-        return a;
+        if (!a.ok()) return a;
+        return i;
     }
     Result<void> rollback() {
         if (!active_) return Result<void>();
         auto r = conn_->driver().rollback(conn_->handle());
         active_ = false;
         auto a = conn_->driver().setAutoCommit(conn_->handle(), true);
-        if (!r.ok() || !a.ok()) poison();  // dead conn or autocommit lost
+        auto i = restore_isolation();
+        if (!r.ok() || !a.ok() || !i.ok()) poison();  // dead conn or session state lost
         if (!r.ok()) return r;
-        return a;
+        if (!a.ok()) return a;
+        return i;
     }
 
 private:
@@ -115,11 +128,20 @@ private:
         poisoned_ = true;
     }
 
+    // Restores the pre-override isolation level, if this transaction set one.
+    Result<void> restore_isolation() {
+        if (!restoreIsolation_) return Result<void>();
+        auto r = conn_->driver().setIsolation(conn_->handle(), *restoreIsolation_);
+        restoreIsolation_.reset();
+        return r;
+    }
+
     void finish_rollback() noexcept {
         if (conn_ && active_) {
             auto r = conn_->driver().rollback(conn_->handle());
             auto a = conn_->driver().setAutoCommit(conn_->handle(), true);
-            if (!r.ok() || !a.ok()) poison();  // see poisoned()
+            auto i = restore_isolation();
+            if (!r.ok() || !a.ok() || !i.ok()) poison();  // see poisoned()
             active_ = false;
         }
     }
@@ -127,12 +149,29 @@ private:
     Connection* conn_;
     bool active_;
     bool poisoned_ = false;
+    std::optional<Isolation> restoreIsolation_;
 };
 
 inline Result<Transaction> Connection::begin() {
     auto a = driver_->setAutoCommit(handle_, false);
     if (!a.ok()) return a.error();
     return Transaction(*this);
+}
+
+inline Result<Transaction> Connection::begin(Isolation level) {
+    auto s = driver_->setIsolation(handle_, level);
+    if (!s.ok()) return s.error();
+    auto a = driver_->setAutoCommit(handle_, false);
+    if (!a.ok()) {
+        // Best-effort: don't leave the override behind on the failure path.
+        driver_->setIsolation(
+            handle_, defaultIsolation_.value_or(Isolation::CursorStability));
+        return a.error();
+    }
+    Transaction t(*this);
+    t.restoreIsolation_ =
+        defaultIsolation_.value_or(Isolation::CursorStability);
+    return t;
 }
 
 }  // namespace halcyon

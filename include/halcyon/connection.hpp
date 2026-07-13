@@ -394,6 +394,11 @@ public:
     // Begins a transaction (autocommit OFF). Defined in transaction.hpp.
     Result<Transaction> begin();
 
+    // Begins a transaction at `level`, restoring the connection's default
+    // isolation when the transaction ends by any path. Defined in
+    // transaction.hpp.
+    Result<Transaction> begin(Isolation level);
+
 private:
     Result<std::int64_t> exec_lease(
         detail::StatementLease& lease,

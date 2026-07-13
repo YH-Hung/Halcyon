@@ -420,40 +420,34 @@ public:
                                  std::move(tx.value()));
     }
 
+    // Begins a transaction at `level` on a freshly leased connection; the
+    // connection's default isolation is restored when the unit of work ends.
+    Result<ScopedTransaction> begin(Isolation level) {
+        auto lease = pool_->acquire();
+        if (!lease.ok()) return lease.error();
+        auto tx = lease.value()->begin(level);
+        if (!tx.ok()) {
+            lease.value().markBroken();
+            return tx.error();
+        }
+        return ScopedTransaction(owned_driver_, pool_, std::move(lease.value()),
+                                 std::move(tx.value()));
+    }
+
     // Functional transaction: commit on a successful Result, rollback on an
     // error Result or a thrown exception (then rethrow). fn must return
     // Result<U>.
     template <class Fn>
     auto transaction(Fn&& fn) -> std::invoke_result_t<Fn, Transaction&> {
-        using R = std::invoke_result_t<Fn, Transaction&>;
-        obs::ScopedSpan span =
-            has_tracer_ ? obs::ScopedSpan(tracer_->startSpan(
-                              "halcyon.transaction", {{"db.system", "db2"}}))
-                        : obs::ScopedSpan();
-        auto st = begin();
-        if (!st.ok()) {
-            span.setStatusError(st.error().sqlstate);
-            return R(st.error());
-        }
-        R r = [&]() -> R {
-            try {
-                return std::forward<Fn>(fn)(*st.value());
-            } catch (...) {
-                st.value().rollback();
-                throw;
-            }
-        }();
-        if (r.ok()) {
-            auto c = st.value().commit();
-            if (!c.ok()) {
-                span.setStatusError(c.error().sqlstate);
-                return R(c.error());
-            }
-        } else {
-            span.setStatusError(r.error().sqlstate);
-            st.value().rollback();
-        }
-        return r;
+        return run_transaction([this] { return begin(); },
+                               std::forward<Fn>(fn));
+    }
+    // As above, but runs the unit of work at `level`.
+    template <class Fn>
+    auto transaction(Isolation level, Fn&& fn)
+        -> std::invoke_result_t<Fn, Transaction&> {
+        return run_transaction([this, level] { return begin(level); },
+                               std::forward<Fn>(fn));
     }
 
     // --- async (std::future, backed by a shared Executor) ---
@@ -631,6 +625,45 @@ private:
     // discards it) so the retry connects anew.
     // Emits halcyon_retries_total: {outcome=retried} before each replay,
     // {outcome=exhausted} when a retried op finally fails out of attempts.
+    // Shared functional-transaction body: opens the transaction span, begins the
+    // unit of work through `beginFn` (so the acquire span nests under the txn
+    // span), then wraps `fn` (commit on ok, rollback on error/exception). Keeps
+    // transaction(fn) and transaction(iso, fn) DRY. `beginFn` returns
+    // Result<ScopedTransaction>.
+    template <class Begin, class Fn>
+    auto run_transaction(Begin&& beginFn, Fn&& fn)
+        -> std::invoke_result_t<Fn, Transaction&> {
+        using R = std::invoke_result_t<Fn, Transaction&>;
+        obs::ScopedSpan span =
+            has_tracer_ ? obs::ScopedSpan(tracer_->startSpan(
+                              "halcyon.transaction", {{"db.system", "db2"}}))
+                        : obs::ScopedSpan();
+        auto st = beginFn();  // acquire nests under the active transaction span
+        if (!st.ok()) {
+            span.setStatusError(st.error().sqlstate);
+            return R(st.error());
+        }
+        R r = [&]() -> R {
+            try {
+                return std::forward<Fn>(fn)(*st.value());
+            } catch (...) {
+                st.value().rollback();
+                throw;
+            }
+        }();
+        if (r.ok()) {
+            auto c = st.value().commit();
+            if (!c.ok()) {
+                span.setStatusError(c.error().sqlstate);
+                return R(c.error());
+            }
+        } else {
+            span.setStatusError(r.error().sqlstate);
+            st.value().rollback();
+        }
+        return r;
+    }
+
     static void emit_retry(ConnectionPool& pool, obs::MetricsSink* m, bool hasM,
                            const char* outcome) {
         if (hasM) m->counter("halcyon_retries_total", 1.0, {{"outcome", outcome}});
@@ -741,6 +774,10 @@ auto query_as(Database& db, const std::string& sql, const params& named) {
 template <class Fn>
 auto transaction(Database& db, Fn&& fn) {
     return db.transaction(std::forward<Fn>(fn));
+}
+template <class Fn>
+auto transaction(Database& db, Isolation level, Fn&& fn) {
+    return db.transaction(level, std::forward<Fn>(fn));
 }
 
 }  // namespace halcyon

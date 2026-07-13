@@ -413,3 +413,22 @@ TEST(FunctionalApi, FreeFunctionsDelegateToDatabase) {
     ASSERT_EQ(people.value().size(), 1u);
     EXPECT_EQ(people.value()[0].id, 3);
 }
+
+TEST(DatabaseIsolation, FunctionalTransactionWithIsolation) {
+    halcyon::testing::MockCliDriver drv;
+    halcyon::PoolConfig cfg;
+    cfg.min = 1;
+    cfg.max = 1;
+    cfg.startMaintenanceThread = false;
+    auto db = halcyon::Database::open(drv, "dsn", cfg);
+    ASSERT_TRUE(db.ok());
+    auto r = db.value().transaction(
+        halcyon::Isolation::RepeatableRead,
+        [](halcyon::Transaction& tx) -> halcyon::Result<std::int64_t> {
+            return tx.execute("UPDATE t SET x = 1");
+        });
+    ASSERT_TRUE(r.ok());
+    ASSERT_EQ(drv.isolationCalls.size(), 2u);  // override + restore
+    EXPECT_EQ(drv.isolationCalls[0].second, halcyon::Isolation::RepeatableRead);
+    EXPECT_EQ(drv.commitCalls, 1);
+}
