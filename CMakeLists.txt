@@ -57,7 +57,8 @@ add_library(halcyon
     src/core/version.cpp
     src/core/error.cpp
     src/detail/cli/sqlstate.cpp
-    src/detail/cli/db2_cli_driver.cpp)
+    src/detail/cli/db2_cli_driver.cpp
+    src/observability/stderr_logger.cpp)
 add_library(halcyon::halcyon ALIAS halcyon)
 
 target_include_directories(halcyon

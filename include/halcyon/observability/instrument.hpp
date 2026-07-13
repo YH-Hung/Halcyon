@@ -57,6 +57,10 @@ inline std::string_view code_label(ErrorCode code) {
             return "mapping";
         case ErrorCode::Pool:
             return "pool";
+        case ErrorCode::InvalidArgument:
+            return "invalid_argument";
+        case ErrorCode::InvalidState:
+            return "invalid_state";
         case ErrorCode::Unknown:
             return "unknown";
     }

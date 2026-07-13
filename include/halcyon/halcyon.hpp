@@ -12,6 +12,7 @@
 #include "halcyon/detail/cli/db2_cli_driver.hpp"
 #include "halcyon/error.hpp"
 #include "halcyon/observability/config.hpp"
+#include "halcyon/observability/logging.hpp"
 #include "halcyon/observability/metrics.hpp"
 #include "halcyon/observability/tracing.hpp"
 #include "halcyon/parameters.hpp"
