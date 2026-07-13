@@ -128,6 +128,33 @@ public:
 };
 ```
 
+## Structured logging
+
+The third observability hook (alongside metrics and tracing): implement
+`halcyon::obs::ILogger` and set it on the pool config. Null (the default)
+costs one branch per potential log site.
+
+```cpp
+struct SpdlogAdapter final : halcyon::obs::ILogger {
+    void log(halcyon::obs::LogLevel level, std::string_view event,
+             std::initializer_list<halcyon::obs::LogField> fields)
+        noexcept override {
+        // Copy what you keep: fields die when log() returns.
+    }
+};
+
+halcyon::PoolConfig cfg;
+cfg.observability.logger = std::make_shared<SpdlogAdapter>();
+// or the built-in, dependency-free reference adapter:
+cfg.observability.logger = std::make_shared<halcyon::obs::StderrLogger>();
+```
+
+Events emitted: `connect.ok`/`connect.fail`, `reconnect.attempt`/`.ok`/`.fail`,
+`retry.attempt`, `pool.exhausted`, `pool.reap`, `stmt_cache.evict`,
+`txn.poisoned`, `savepoint.poisoned`, `isolation.restore_fail` (surfaced via
+`txn.poisoned`). `StderrLogger` prints one logfmt line per event:
+`ts=1720000000 level=warn event=retry.attempt outcome=retried`.
+
 ## Disabling observability at compile time
 
 Nothing needs to be disabled: both adapters are compiled-in only when the

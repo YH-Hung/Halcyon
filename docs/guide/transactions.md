@@ -121,19 +121,70 @@ db.transaction([](halcyon::Transaction& tx) -> halcyon::Result<void> {
 });
 ```
 
-## Isolation level
+## Savepoints & nested transactions
 
-Halcyon does not set an explicit isolation level; the connection inherits whatever
-Db2 defaults to (typically `CURSOR STABILITY`). Set it yourself inside the
-transaction if needed:
+A `Savepoint` marks a point inside a transaction you can roll back to without
+abandoning the whole unit of work. Names are auto-generated
+(`halcyon_sp_1`, ...) or explicit (validated: `[A-Za-z_][A-Za-z0-9_]{0,127}`,
+not starting with `SYS`).
 
 ```cpp
-db.transaction([](halcyon::Transaction& tx) -> halcyon::Result<void> {
-    if (auto r = tx.execute("SET CURRENT ISOLATION = RR"); !r.ok()) return r.error();
-    // ... serialisable reads ...
-    return {};
+auto tx = conn.begin().value();
+tx.execute("INSERT INTO orders VALUES (?)", 1).value();
+
+auto sp = tx.savepoint().value();           // or tx.savepoint("stage1")
+tx.execute("INSERT INTO orders VALUES (?)", 2).value();
+sp.rollback().value();                       // undoes only the second insert
+tx.commit().value();                         // first insert persists
+```
+
+Like `Transaction`, a `Savepoint` is a one-shot RAII guard: `release()` keeps
+the work, `rollback()` undoes it, and a destructor that saw neither rolls
+back and releases (undo by default). A failed savepoint statement poisons the
+savepoint *and* its transaction, so the pooled connection is discarded rather
+than reused. Destroy savepoints before their transaction ends or moves, inner
+before outer.
+
+`Transaction::nested(fn)` wraps `fn` in a savepoint scope — the functional
+style for "try this part, keep the rest":
+
+```cpp
+auto r = tx.nested([&](halcyon::Transaction& t) -> halcyon::Result<std::int64_t> {
+    return t.execute("INSERT INTO audit VALUES (?)", id);
+});
+// ok result  -> savepoint released (work kept)
+// error/throw -> rolled back to the savepoint; outer transaction continues
+```
+
+Calling `commit()`/`rollback()` on the transaction inside `nested()` is a
+programming error and yields `ErrorCode::InvalidState`.
+
+## Isolation levels
+
+Halcyon uses Db2's own terminology — `UncommittedRead` (UR),
+`CursorStability` (CS, the Db2 default), `ReadStability` (RS),
+`RepeatableRead` (RR) — because the CLI constants behind them do **not** line
+up with the SQL-standard names (Db2 RR maps to the CLI's SERIALIZABLE).
+
+Set a pool-wide session default, a per-transaction override, or both:
+
+```cpp
+halcyon::PoolConfig cfg;
+cfg.isolation = halcyon::Isolation::CursorStability;   // every connection
+
+auto tx = conn.begin(halcyon::Isolation::RepeatableRead).value();
+// ... transaction runs at RR ...
+tx.commit().value();   // connection restored to its default level
+
+db.transaction(halcyon::Isolation::UncommittedRead, [](auto& tx) {
+    return tx.template queryAs<Row>("SELECT ...");
 });
 ```
+
+The override is restored on **every** exit path (commit, rollback,
+destructor). If the restore fails the transaction is poisoned and the
+connection discarded — a pooled connection never carries a surprise
+isolation level.
 
 ## Do not auto-retry transactions
 

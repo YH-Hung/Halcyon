@@ -44,6 +44,7 @@ nav:
       - Connection Pool: guide/connection-pool.md
       - Transactions: guide/transactions.md
       - Batch Operations: guide/batch-operations.md
+      - Large Objects (LOBs): guide/lobs.md
       - Async: guide/async.md
       - Observability: guide/observability.md
       - Advanced: guide/advanced.md
