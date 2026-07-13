@@ -35,3 +35,17 @@ TEST(ErrorModel, ExceptionCarriesErrorAndMessage) {
         EXPECT_STREQ(ex.what(), "cannot connect");
     }
 }
+
+TEST(ErrorCode, InvalidArgumentAndInvalidStateRoundTrip) {
+    EXPECT_STREQ(halcyon::to_string(halcyon::ErrorCode::InvalidArgument),
+                 "InvalidArgument");
+    EXPECT_STREQ(halcyon::to_string(halcyon::ErrorCode::InvalidState),
+                 "InvalidState");
+
+    halcyon::Error e;
+    e.code = halcyon::ErrorCode::InvalidArgument;
+    e.message = "bad name";
+    EXPECT_THROW(halcyon::throw_error(e), halcyon::Exception);
+    e.code = halcyon::ErrorCode::InvalidState;
+    EXPECT_THROW(halcyon::throw_error(e), halcyon::Exception);
+}

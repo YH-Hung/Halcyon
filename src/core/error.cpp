@@ -22,6 +22,10 @@ const char* to_string(ErrorCode code) noexcept {
             return "Mapping";
         case ErrorCode::Pool:
             return "Pool";
+        case ErrorCode::InvalidArgument:
+            return "InvalidArgument";
+        case ErrorCode::InvalidState:
+            return "InvalidState";
         case ErrorCode::Unknown:
             return "Unknown";
     }
@@ -44,6 +48,8 @@ void throw_error(const Error& err) {
         case ErrorCode::Mapping:
             throw MappingException(err);
         case ErrorCode::Pool:
+        case ErrorCode::InvalidArgument:
+        case ErrorCode::InvalidState:
         case ErrorCode::Ok:
         case ErrorCode::Unknown:
             throw Exception(err);

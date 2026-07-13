@@ -16,6 +16,8 @@ enum class ErrorCode {
     Transient,
     Mapping,
     Pool,
+    InvalidArgument,  // rejected client-side input (e.g. savepoint name)
+    InvalidState,     // API misuse (e.g. out-of-order streaming column access)
     Unknown,
 };
 
