@@ -326,6 +326,20 @@ public:
                               });
                           });
     }
+    // Streaming execute (LobSource args). Always a single attempt: a LOB
+    // source's stream is consumed by the first try and cannot be replayed.
+    template <class... Args,
+              std::enable_if_t<detail::stream_pack_ok<Args...>::value, int> = 0>
+    Result<std::int64_t> execute(const std::string& sql, const Args&... args) {
+        return instrument(metrics_, tracer_, has_metrics_, has_tracer_,
+                          "halcyon.execute", sql, [&] {
+                              return run_with_policy(ExecPolicy::once(),
+                                                     [&](Connection& c) {
+                                                         return c.execute(sql,
+                                                                          args...);
+                                                     });
+                          });
+    }
 
     // --- query (returns a lease-owning QueryResult) ---
     template <class... Args,

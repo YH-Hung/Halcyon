@@ -15,6 +15,7 @@
 #include "halcyon/detail/statement_cache.hpp"
 #include "halcyon/error.hpp"
 #include "halcyon/isolation.hpp"
+#include "halcyon/lob.hpp"
 #include "halcyon/observability/logging.hpp"
 #include "halcyon/observability/metrics.hpp"
 #include "halcyon/parameters.hpp"
@@ -325,6 +326,23 @@ public:
         auto lease = cache_->acquire(sql);
         if (!lease.ok()) return lease.error();
         return exec_lease(lease.value(), detail::pack_params(args...));
+    }
+
+    // Streaming execute: any LobSource argument routes through the driver's
+    // data-at-exec path. Sources are single-use — never retried.
+    template <class... Args,
+              std::enable_if_t<detail::stream_pack_ok<Args...>::value, int> = 0>
+    Result<std::int64_t> execute(const std::string& sql, const Args&... args) {
+        auto packed = detail::pack_stream_params(args...);
+        auto lease = cache_->acquire(sql);
+        if (!lease.ok()) return lease.error();
+        auto e = driver_->executeStreaming(lease.value().handle(), packed.values,
+                                           std::move(packed.sources));
+        if (!e.ok()) {
+            lease.value().poison();
+            return e.error();
+        }
+        return e.value();
     }
 
     // --- named-parameter overloads ---
