@@ -53,7 +53,8 @@ add_executable(halcyon_unit_tests
     unit/test_observability.cpp
     unit/test_logging.cpp
     unit/test_savepoint.cpp
-    unit/test_lob.cpp)
+    unit/test_lob.cpp
+    unit/test_streaming.cpp)
 
 target_link_libraries(halcyon_unit_tests
     PRIVATE halcyon::halcyon GTest::gtest_main Threads::Threads)

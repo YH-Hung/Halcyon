@@ -116,6 +116,13 @@ public:
         return conn_->template queryAs<T>(sql, named);
     }
 
+    // Streaming query within the unit of work; defined in streaming.hpp.
+    template <class... Args>
+    Result<StreamingResultSet> queryStreaming(const std::string& sql,
+                                              const Args&... args);
+    Result<StreamingResultSet> queryStreaming(const std::string& sql,
+                                              const params& named);
+
     // Batch insert within the unit of work; forwards to the leased connection.
     Result<std::int64_t> executeBatch(
         const std::string& sql,

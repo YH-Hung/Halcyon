@@ -21,6 +21,7 @@
 #include "halcyon/pool.hpp"
 #include "halcyon/result.hpp"
 #include "halcyon/retry.hpp"
+#include "halcyon/streaming.hpp"
 #include "halcyon/transaction.hpp"
 #include "halcyon/types.hpp"
 #include "halcyon/version.hpp"

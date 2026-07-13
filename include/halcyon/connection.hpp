@@ -29,8 +29,9 @@ namespace detail {
 inline constexpr std::size_t kFetchBlockRows = 4096;
 }  // namespace detail
 
-class ResultSet;    // fwd
-class Transaction;  // fwd (defined in transaction.hpp)
+class ResultSet;           // fwd
+class StreamingResultSet;  // fwd (defined in streaming.hpp)
+class Transaction;         // fwd (defined in transaction.hpp)
 
 /// \brief Non-owning view of one already-materialized cursor row.
 ///
@@ -391,6 +392,16 @@ public:
         return defaultIsolation_;
     }
 
+    // Streaming query: row-at-a-time cursor with chunked LOB access (no block
+    // buffering). Columns must be read in ascending order per row. Defined in
+    // streaming.hpp.
+    template <class... Args,
+              std::enable_if_t<(is_bindable<Args>::value && ...), int> = 0>
+    Result<StreamingResultSet> queryStreaming(const std::string& sql,
+                                              const Args&... args);
+    Result<StreamingResultSet> queryStreaming(const std::string& sql,
+                                              const params& named);
+
     // Begins a transaction (autocommit OFF). Defined in transaction.hpp.
     Result<Transaction> begin();
 
@@ -400,6 +411,9 @@ public:
     Result<Transaction> begin(Isolation level);
 
 private:
+    Result<StreamingResultSet> queryStreamingImpl(
+        const std::string& sql, const std::vector<detail::cli::Value>& ps);
+
     Result<std::int64_t> exec_lease(
         detail::StatementLease& lease,
         const std::vector<detail::cli::Value>& params) {
