@@ -631,8 +631,12 @@ private:
     // discards it) so the retry connects anew.
     // Emits halcyon_retries_total: {outcome=retried} before each replay,
     // {outcome=exhausted} when a retried op finally fails out of attempts.
-    static void emit_retry(obs::MetricsSink* m, bool hasM, const char* outcome) {
+    static void emit_retry(ConnectionPool& pool, obs::MetricsSink* m, bool hasM,
+                           const char* outcome) {
         if (hasM) m->counter("halcyon_retries_total", 1.0, {{"outcome", outcome}});
+        if (pool.logger() != nullptr)
+            pool.logger()->log(obs::LogLevel::Warn, "retry.attempt",
+                               {{"outcome", outcome}});
     }
 
     template <class Op>
@@ -653,10 +657,10 @@ private:
             if (last.code == ErrorCode::Connection) lease.value().markBroken();
             if (!last.retriable || attempt == policy.maxAttempts) {
                 if (attempt > 1 && attempt == policy.maxAttempts)
-                    emit_retry(m, hasM, "exhausted");
+                    emit_retry(pool, m, hasM, "exhausted");
                 return r;
             }
-            emit_retry(m, hasM, "retried");
+            emit_retry(pool, m, hasM, "retried");
             policy.backoff.sleep(policy.backoff.delay_for(attempt));
         }
         return R(last);
@@ -686,10 +690,10 @@ private:
             if (last.code == ErrorCode::Connection) lease.value().markBroken();
             if (!last.retriable || attempt == policy.maxAttempts) {
                 if (attempt > 1 && attempt == policy.maxAttempts)
-                    emit_retry(m, hasM, "exhausted");
+                    emit_retry(*pool, m, hasM, "exhausted");
                 break;
             }
-            emit_retry(m, hasM, "retried");
+            emit_retry(*pool, m, hasM, "retried");
             policy.backoff.sleep(policy.backoff.delay_for(attempt));
         }
         return last;

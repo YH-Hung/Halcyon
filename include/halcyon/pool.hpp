@@ -337,7 +337,8 @@ private:
         for (int attempt = 1; attempt <= attempts; ++attempt) {
             auto c = Connection::open(*driver_, params_,
                                       config_.statementCacheSize,
-                                      has_metrics_ ? metrics_ : nullptr);
+                                      has_metrics_ ? metrics_ : nullptr,
+                                      logger_);
             if (c.ok()) {
                 if (logger_ != nullptr)
                     logger_->log(obs::LogLevel::Info, "connect.ok",

@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include "capturing_logger.hpp"
 #include "halcyon/connection.hpp"
 #include "halcyon/transaction.hpp"
 #include "mock_cli_driver.hpp"
@@ -100,4 +101,21 @@ TEST(Transaction, MoveDoesNotDoubleRollback) {
         ASSERT_TRUE(b.execute("DELETE FROM t").ok());
     }
     EXPECT_EQ(driver.rollbackCalls, 1);  // exactly once, from b
+}
+
+TEST(TransactionLogging, PoisonedCommitIsLogged) {
+    halcyon::testing::MockCliDriver drv;
+    halcyon::testing::CapturingLogger logger;
+    auto cr = halcyon::Connection::open(drv, {"dsn"}, 0, nullptr, &logger);
+    ASSERT_TRUE(cr.ok());
+    halcyon::Connection conn = std::move(cr.value());
+    auto txr = conn.begin();
+    ASSERT_TRUE(txr.ok());
+    halcyon::Error dead;
+    dead.code = halcyon::ErrorCode::Connection;
+    drv.txnErrors.push_back(dead);  // commit() fails
+    auto c = txr.value().commit();
+    EXPECT_FALSE(c.ok());
+    EXPECT_TRUE(txr.value().poisoned());
+    EXPECT_EQ(logger.count("txn.poisoned"), 1u);
 }

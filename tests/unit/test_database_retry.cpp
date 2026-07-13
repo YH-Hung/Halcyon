@@ -2,7 +2,9 @@
 
 #include <chrono>
 #include <cstdint>
+#include <memory>
 
+#include "capturing_logger.hpp"
 #include "halcyon/database.hpp"
 #include "mock_cli_driver.hpp"
 
@@ -96,4 +98,30 @@ TEST(DatabaseRetry, ConnectionErrorMarksLeaseBroken) {
     ASSERT_TRUE(qr.ok()) << qr.error().message;
     // broken lease was discarded and a replacement connected
     EXPECT_GE(driver.connectCalls, 2);
+}
+
+struct RetryCountRow {
+    std::int64_t c;
+};
+HALCYON_REFLECT(RetryCountRow, c);
+
+TEST(DatabaseRetryLogging, RetriedAttemptIsLogged) {
+    halcyon::testing::MockCliDriver drv;
+    auto logger = std::make_shared<halcyon::testing::CapturingLogger>();
+    halcyon::PoolConfig cfg;
+    cfg.min = 1;
+    cfg.max = 2;
+    cfg.startMaintenanceThread = false;
+    cfg.backoff.maxAttempts = 2;
+    cfg.backoff.sleep = [](std::chrono::milliseconds) {};  // no real waiting
+    cfg.observability.logger = logger;
+    auto db = halcyon::Database::open(drv, "dsn", cfg);
+    ASSERT_TRUE(db.ok());
+    halcyon::Error transient;
+    transient.code = halcyon::ErrorCode::Transient;
+    transient.retriable = true;
+    drv.executeErrors.push_back(transient);  // first SELECT attempt fails
+    auto r = db.value().queryAs<RetryCountRow>("SELECT 1 FROM t");
+    // Second attempt succeeds (no more scripted errors).
+    EXPECT_EQ(logger->count("retry.attempt"), 1u);
 }

@@ -90,7 +90,7 @@ public:
         auto c = conn_->driver().commit(conn_->handle());
         active_ = false;
         auto a = conn_->driver().setAutoCommit(conn_->handle(), true);
-        if (!c.ok() || !a.ok()) poisoned_ = true;  // dead conn or autocommit lost
+        if (!c.ok() || !a.ok()) poison();  // dead conn or autocommit lost
         if (!c.ok()) return c;
         return a;
     }
@@ -99,7 +99,7 @@ public:
         auto r = conn_->driver().rollback(conn_->handle());
         active_ = false;
         auto a = conn_->driver().setAutoCommit(conn_->handle(), true);
-        if (!r.ok() || !a.ok()) poisoned_ = true;  // dead conn or autocommit lost
+        if (!r.ok() || !a.ok()) poison();  // dead conn or autocommit lost
         if (!r.ok()) return r;
         return a;
     }
@@ -108,11 +108,18 @@ private:
     friend class Connection;
     explicit Transaction(Connection& conn) : conn_(&conn), active_(true) {}
 
+    // Central poison point: marks the transaction unusable and logs once.
+    void poison() noexcept {
+        if (!poisoned_ && conn_ != nullptr && conn_->logger() != nullptr)
+            conn_->logger()->log(obs::LogLevel::Error, "txn.poisoned", {});
+        poisoned_ = true;
+    }
+
     void finish_rollback() noexcept {
         if (conn_ && active_) {
             auto r = conn_->driver().rollback(conn_->handle());
             auto a = conn_->driver().setAutoCommit(conn_->handle(), true);
-            if (!r.ok() || !a.ok()) poisoned_ = true;  // see poisoned()
+            if (!r.ok() || !a.ok()) poison();  // see poisoned()
             active_ = false;
         }
     }

@@ -14,6 +14,7 @@
 #include "halcyon/detail/cli/driver.hpp"
 #include "halcyon/detail/statement_cache.hpp"
 #include "halcyon/error.hpp"
+#include "halcyon/observability/logging.hpp"
 #include "halcyon/observability/metrics.hpp"
 #include "halcyon/parameters.hpp"
 #include "halcyon/result.hpp"
@@ -251,23 +252,29 @@ public:
     static Result<Connection> open(detail::cli::ICliDriver& driver,
                                    const detail::cli::ConnectionParams& params,
                                    std::size_t statementCacheSize = 0,
-                                   obs::MetricsSink* metrics = nullptr) {
+                                   obs::MetricsSink* metrics = nullptr,
+                                   obs::ILogger* logger = nullptr) {
         auto h = driver.connect(params);
         if (!h.ok()) return h.error();
-        return Connection(driver, h.value(), statementCacheSize, metrics);
+        return Connection(driver, h.value(), statementCacheSize, metrics, logger);
     }
 
     Connection(detail::cli::ICliDriver& driver,
                detail::cli::ConnectionHandle handle,
                std::size_t statementCacheSize = 0,
-               obs::MetricsSink* metrics = nullptr)
+               obs::MetricsSink* metrics = nullptr,
+               obs::ILogger* logger = nullptr)
         : driver_(&driver),
           handle_(handle),
+          logger_(logger),
           cache_(std::make_unique<detail::StatementCache>(
-              driver, handle, statementCacheSize, metrics)) {}
+              driver, handle, statementCacheSize, metrics, logger)) {}
 
     Connection(Connection&& o) noexcept
-        : driver_(o.driver_), handle_(o.handle_), cache_(std::move(o.cache_)) {
+        : driver_(o.driver_),
+          handle_(o.handle_),
+          logger_(o.logger_),
+          cache_(std::move(o.cache_)) {
         o.handle_ = detail::cli::ConnectionHandle::invalid;
     }
     Connection& operator=(Connection&& o) noexcept {
@@ -275,6 +282,7 @@ public:
             reset();
             driver_ = o.driver_;
             handle_ = o.handle_;
+            logger_ = o.logger_;
             cache_ = std::move(o.cache_);
             o.handle_ = detail::cli::ConnectionHandle::invalid;
         }
@@ -287,6 +295,10 @@ public:
     detail::cli::ConnectionHandle handle() const noexcept { return handle_; }
 
     detail::cli::ICliDriver& driver() const noexcept { return *driver_; }
+
+    // Nullable structured-log sink shared with the owning pool; transactions and
+    // savepoints route poison/lifecycle events here.
+    obs::ILogger* logger() const noexcept { return logger_; }
 
     Result<Statement> prepare(const std::string& sql) {
         auto h = driver_->prepare(handle_, sql);
@@ -455,6 +467,7 @@ private:
     }
     detail::cli::ICliDriver* driver_;
     detail::cli::ConnectionHandle handle_;
+    obs::ILogger* logger_ = nullptr;
     std::unique_ptr<detail::StatementCache> cache_;
 };
 

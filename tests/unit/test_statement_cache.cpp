@@ -5,6 +5,7 @@
 #include <string>
 #include <string_view>
 
+#include "capturing_logger.hpp"
 #include "halcyon/detail/statement_cache.hpp"
 #include "mock_cli_driver.hpp"
 
@@ -173,4 +174,16 @@ TEST(StatementCache, EmitsMetrics) {
     EXPECT_DOUBLE_EQ(sink.counts["halcyon_stmt_cache_total:miss"], 1.0);
     EXPECT_DOUBLE_EQ(sink.counts["halcyon_stmt_cache_total:hit"], 1.0);
     EXPECT_DOUBLE_EQ(sink.gauges["halcyon_stmt_cache_size"], 1.0);
+}
+
+TEST(StatementCacheLogging, EvictionIsLogged) {
+    halcyon::testing::MockCliDriver drv;
+    halcyon::testing::CapturingLogger logger;
+    auto conn = drv.connect({"dsn"});
+    ASSERT_TRUE(conn.ok());
+    halcyon::detail::StatementCache cache(drv, conn.value(), /*capacity=*/1,
+                                          /*metrics=*/nullptr, &logger);
+    { auto a = cache.acquire("SELECT 1"); ASSERT_TRUE(a.ok()); }
+    { auto b = cache.acquire("SELECT 2"); ASSERT_TRUE(b.ok()); }  // evicts SELECT 1
+    EXPECT_EQ(logger.count("stmt_cache.evict"), 1u);
 }
