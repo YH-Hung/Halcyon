@@ -8,12 +8,14 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <thread>
 #include <vector>
 
 #include "halcyon/connection.hpp"
 #include "halcyon/detail/cli/driver.hpp"
 #include "halcyon/error.hpp"
+#include "halcyon/isolation.hpp"
 #include "halcyon/observability/config.hpp"
 #include "halcyon/observability/instrument.hpp"
 #include "halcyon/result.hpp"
@@ -41,6 +43,7 @@ struct PoolConfig {
     bool startMaintenanceThread = true;
     obs::ObservabilityConfig observability{};  // default-null = no-op
     std::size_t statementCacheSize = 64;       // per-connection prepared-stmt LRU; 0 disables
+    std::optional<Isolation> isolation;        // session default; nullopt = server default (CS)
 };
 
 namespace detail {
@@ -339,6 +342,10 @@ private:
                                       config_.statementCacheSize,
                                       has_metrics_ ? metrics_ : nullptr,
                                       logger_);
+            if (c.ok() && config_.isolation) {
+                auto iso = c.value().setDefaultIsolation(*config_.isolation);
+                if (!iso.ok()) c = iso.error();  // treat as a failed attempt
+            }
             if (c.ok()) {
                 if (logger_ != nullptr)
                     logger_->log(obs::LogLevel::Info, "connect.ok",

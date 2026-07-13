@@ -14,6 +14,7 @@
 #include "halcyon/detail/cli/driver.hpp"
 #include "halcyon/detail/statement_cache.hpp"
 #include "halcyon/error.hpp"
+#include "halcyon/isolation.hpp"
 #include "halcyon/observability/logging.hpp"
 #include "halcyon/observability/metrics.hpp"
 #include "halcyon/parameters.hpp"
@@ -274,6 +275,7 @@ public:
         : driver_(o.driver_),
           handle_(o.handle_),
           logger_(o.logger_),
+          defaultIsolation_(o.defaultIsolation_),
           cache_(std::move(o.cache_)) {
         o.handle_ = detail::cli::ConnectionHandle::invalid;
     }
@@ -283,6 +285,7 @@ public:
             driver_ = o.driver_;
             handle_ = o.handle_;
             logger_ = o.logger_;
+            defaultIsolation_ = o.defaultIsolation_;
             cache_ = std::move(o.cache_);
             o.handle_ = detail::cli::ConnectionHandle::invalid;
         }
@@ -374,6 +377,18 @@ public:
             return e.error();
         }
         return e.value();
+    }
+
+    // Applies `level` as this connection's session default and remembers it as
+    // the restore target for per-transaction overrides (Task 7 / spec §4).
+    Result<void> setDefaultIsolation(Isolation level) {
+        auto r = driver_->setIsolation(handle_, level);
+        if (!r.ok()) return r;
+        defaultIsolation_ = level;
+        return r;
+    }
+    std::optional<Isolation> defaultIsolation() const noexcept {
+        return defaultIsolation_;
     }
 
     // Begins a transaction (autocommit OFF). Defined in transaction.hpp.
@@ -468,6 +483,7 @@ private:
     detail::cli::ICliDriver* driver_;
     detail::cli::ConnectionHandle handle_;
     obs::ILogger* logger_ = nullptr;
+    std::optional<Isolation> defaultIsolation_;
     std::unique_ptr<detail::StatementCache> cache_;
 };
 

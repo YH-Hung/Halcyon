@@ -462,3 +462,33 @@ TEST(PoolLogging, ReapIsLogged) {
     pool.value()->maintain();
     EXPECT_EQ(logger->count("pool.reap"), 1u);
 }
+
+TEST(PoolIsolation, DefaultIsolationAppliedToEveryConnection) {
+    halcyon::testing::MockCliDriver drv;
+    halcyon::PoolConfig cfg;
+    cfg.min = 2;
+    cfg.max = 2;
+    cfg.startMaintenanceThread = false;
+    cfg.isolation = halcyon::Isolation::ReadStability;
+    auto pool = halcyon::ConnectionPool::create(drv, {"dsn"}, cfg);
+    ASSERT_TRUE(pool.ok());
+    ASSERT_EQ(drv.isolationCalls.size(), 2u);
+    EXPECT_EQ(drv.isolationCalls[0].second, halcyon::Isolation::ReadStability);
+    EXPECT_EQ(drv.isolationCalls[1].second, halcyon::Isolation::ReadStability);
+}
+
+TEST(PoolIsolation, ApplyFailureCountsAsConnectFailure) {
+    halcyon::testing::MockCliDriver drv;
+    halcyon::Error e;
+    e.code = halcyon::ErrorCode::Connection;
+    drv.isolationErrors.push_back(e);
+    drv.isolationErrors.push_back(e);
+    drv.isolationErrors.push_back(e);  // every backoff attempt fails
+    halcyon::PoolConfig cfg;
+    cfg.min = 1;
+    cfg.max = 1;
+    cfg.startMaintenanceThread = false;
+    cfg.isolation = halcyon::Isolation::UncommittedRead;
+    auto pool = halcyon::ConnectionPool::create(drv, {"dsn"}, cfg);
+    EXPECT_FALSE(pool.ok());
+}
