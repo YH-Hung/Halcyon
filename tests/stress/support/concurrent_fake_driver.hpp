@@ -185,6 +185,9 @@ public:
         else ++autoCommitOff;
         return Result<void>();
     }
+    Result<void> setIsolation(ConnectionHandle, Isolation) override {
+        return Result<void>();
+    }
     Result<void> commit(ConnectionHandle) override {
         ++commitCalls;
         return Result<void>();

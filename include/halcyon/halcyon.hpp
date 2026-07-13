@@ -11,6 +11,7 @@
 #include "halcyon/database.hpp"
 #include "halcyon/detail/cli/db2_cli_driver.hpp"
 #include "halcyon/error.hpp"
+#include "halcyon/isolation.hpp"
 #include "halcyon/observability/config.hpp"
 #include "halcyon/observability/logging.hpp"
 #include "halcyon/observability/metrics.hpp"

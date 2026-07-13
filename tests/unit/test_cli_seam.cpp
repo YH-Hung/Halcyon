@@ -177,3 +177,20 @@ TEST(CliSeamBlock, FetchBlockPropagatesScriptedError) {
     ASSERT_FALSE(blk.ok());
     EXPECT_EQ(blk.error().code, ErrorCode::Connection);
 }
+
+TEST(CliSeam, SetIsolationIsRecordedAndScriptable) {
+    halcyon::testing::MockCliDriver drv;
+    auto conn = drv.connect({"dsn"});
+    ASSERT_TRUE(conn.ok());
+    auto ok = drv.setIsolation(conn.value(), halcyon::Isolation::RepeatableRead);
+    EXPECT_TRUE(ok.ok());
+    ASSERT_EQ(drv.isolationCalls.size(), 1u);
+    EXPECT_EQ(drv.isolationCalls[0].second, halcyon::Isolation::RepeatableRead);
+
+    halcyon::Error e;
+    e.code = halcyon::ErrorCode::Connection;
+    drv.isolationErrors.push_back(e);
+    auto bad = drv.setIsolation(conn.value(), halcyon::Isolation::CursorStability);
+    EXPECT_FALSE(bad.ok());
+    EXPECT_EQ(bad.error().code, halcyon::ErrorCode::Connection);
+}

@@ -493,6 +493,33 @@ public:
                               "SQLSetConnectAttr(AUTOCOMMIT) failed");
         return Result<void>();
     }
+    Result<void> setIsolation(ConnectionHandle conn, Isolation level) override {
+        SQLHDBC dbc = conn_handle(conn);
+        if (dbc == SQL_NULL_HANDLE) return unknown_conn();
+        SQLINTEGER v = SQL_TXN_READ_COMMITTED;
+        switch (level) {
+            case Isolation::UncommittedRead:
+                v = SQL_TXN_READ_UNCOMMITTED;
+                break;
+            case Isolation::CursorStability:
+                v = SQL_TXN_READ_COMMITTED;
+                break;
+            case Isolation::ReadStability:
+                v = SQL_TXN_REPEATABLE_READ;
+                break;
+            case Isolation::RepeatableRead:
+                v = SQL_TXN_SERIALIZABLE;
+                break;
+        }
+        SQLRETURN rc = SQLSetConnectAttr(
+            dbc, SQL_ATTR_TXN_ISOLATION,
+            reinterpret_cast<SQLPOINTER>(static_cast<SQLULEN>(v)),  // NOLINT(performance-no-int-to-ptr)
+            0);
+        if (!cli_ok(rc))
+            return make_error(SQL_HANDLE_DBC, dbc, ErrorCode::Connection,
+                              "SQLSetConnectAttr(SQL_ATTR_TXN_ISOLATION) failed");
+        return Result<void>();
+    }
     Result<void> commit(ConnectionHandle conn) override {
         return end_tran(conn, SQL_COMMIT, "SQLEndTran(COMMIT) failed");
     }

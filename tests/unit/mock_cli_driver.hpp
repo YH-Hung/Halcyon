@@ -7,9 +7,11 @@
 #include <functional>
 #include <map>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "halcyon/detail/cli/driver.hpp"
+#include "halcyon/isolation.hpp"
 
 namespace halcyon::testing {
 
@@ -240,6 +242,21 @@ public:
         (void)handle;
         ++rollbackCalls;
         return next_txn_result();
+    }
+
+    // --- isolation scripting (v1.1) ---
+    std::vector<std::pair<ConnectionHandle, halcyon::Isolation>> isolationCalls;
+    std::deque<Error> isolationErrors;
+
+    Result<void> setIsolation(ConnectionHandle conn,
+                              halcyon::Isolation level) override {
+        isolationCalls.emplace_back(conn, level);
+        if (!isolationErrors.empty()) {
+            Error e = isolationErrors.front();
+            isolationErrors.pop_front();
+            return Result<void>(e);
+        }
+        return Result<void>();
     }
 
 private:

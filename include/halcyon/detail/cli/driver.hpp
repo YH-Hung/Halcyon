@@ -6,6 +6,7 @@
 #include <variant>
 #include <vector>
 
+#include "halcyon/isolation.hpp"
 #include "halcyon/result.hpp"
 
 namespace halcyon::detail::cli {
@@ -93,6 +94,12 @@ public:
     // Enables/disables autocommit on the connection. A transaction begins by
     // disabling it and ends (commit/rollback) by re-enabling it.
     virtual Result<void> setAutoCommit(ConnectionHandle conn, bool enabled) = 0;
+
+    // Sets the connection's transaction isolation attribute. Must not be
+    // called while a transaction is open on the connection (CLI restriction);
+    // callers set it immediately before begin and restore it after end.
+    virtual Result<void> setIsolation(ConnectionHandle conn,
+                                      Isolation level) = 0;
 
     // Commits / rolls back the current unit of work on the connection.
     virtual Result<void> commit(ConnectionHandle conn) = 0;
