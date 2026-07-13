@@ -10,6 +10,7 @@ endfunction()
 # ---- Front-end #1: correctness (GoogleTest, CTest label "stress") ----
 add_executable(halcyon_stress_tests
     correctness/test_stress_concurrency.cpp
+    correctness/test_stress_savepoints.cpp
     support/workload_runner.cpp)
 target_link_libraries(halcyon_stress_tests
     PRIVATE halcyon::halcyon GTest::gtest_main Threads::Threads)
