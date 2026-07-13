@@ -535,17 +535,83 @@ public:
         return end_tran(conn, SQL_ROLLBACK, "SQLEndTran(ROLLBACK) failed");
     }
 
-    // --- Streaming data path (v1.1) — real implementations land in Tasks 17-18.
-    Result<bool> fetchNext(StatementHandle) override {
-        return Result<bool>(not_implemented("fetchNext"));
+    // --- Streaming data path (v1.1) ---
+    // Streaming consumes a cursor via fetchNext+getValue+getDataChunk with NO
+    // column buffers bound (SQL_ATTR_ROW_ARRAY_SIZE stays at its default of 1),
+    // so it must never be mixed with fetchBlock on the same cursor.
+    Result<bool> fetchNext(StatementHandle stmt) override {
+        StmtState* st = stmt_state(stmt);
+        if (st == nullptr) return Result<bool>(unknown_stmt());
+        if (!st->cols) {
+            if (auto d = describe_columns(st); !d.ok()) return d.error();
+        }
+        SQLRETURN rc = SQLFetch(st->handle);
+        if (rc == SQL_NO_DATA) return Result<bool>(false);
+        if (!cli_ok(rc))
+            return make_error(SQL_HANDLE_STMT, st->handle, ErrorCode::Connection,
+                              "SQLFetch (streaming) failed");
+        return Result<bool>(true);
     }
-    Result<Value> getValue(StatementHandle, std::size_t) override {
-        return Result<Value>(not_implemented("getValue"));
+
+    Result<Value> getValue(StatementHandle stmt, std::size_t col) override {
+        StmtState* st = stmt_state(stmt);
+        if (st == nullptr) return Result<Value>(unknown_stmt());
+        if (!st->cols) {
+            if (auto d = describe_columns(st); !d.ok()) return d.error();
+        }
+        if (col >= st->cols->size())
+            return Result<Value>(mapping_err("column index out of range"));
+        return read_cell(st, col);
     }
-    Result<GetDataChunk> getDataChunk(StatementHandle, std::size_t, std::byte*,
-                                      std::size_t) override {
-        return Result<GetDataChunk>(not_implemented("getDataChunk"));
+
+    Result<GetDataChunk> getDataChunk(StatementHandle stmt, std::size_t col,
+                                      std::byte* buf,
+                                      std::size_t bufLen) override {
+        StmtState* st = stmt_state(stmt);
+        if (st == nullptr) return Result<GetDataChunk>(unknown_stmt());
+        if (!st->cols) {
+            if (auto d = describe_columns(st); !d.ok()) return d.error();
+        }
+        if (col >= st->cols->size())
+            return Result<GetDataChunk>(mapping_err("column index out of range"));
+        // Char-vs-binary predicate mirrors read_column_typed's dispatch: binary
+        // types read as SQL_C_BINARY, everything else as SQL_C_CHAR.
+        const SQLSMALLINT t = (*st->cols)[col].sqlType;
+        const bool charForm = !(t == SQL_BINARY || t == SQL_VARBINARY ||
+                                t == SQL_LONGVARBINARY || t == SQL_BLOB);
+        if (bufLen == 0 || (charForm && bufLen < 2))
+            return Result<GetDataChunk>(mapping_err("chunk buffer too small"));
+        SQLLEN ind = 0;
+        SQLRETURN rc = SQLGetData(st->handle, static_cast<SQLUSMALLINT>(col + 1),
+                                  charForm ? SQL_C_CHAR : SQL_C_BINARY, buf,
+                                  static_cast<SQLLEN>(bufLen), &ind);
+        GetDataChunk out;
+        if (rc == SQL_NO_DATA) {  // cell already fully consumed
+            out.done = true;
+            return Result<GetDataChunk>(out);
+        }
+        if (!cli_ok(rc))
+            return make_error(SQL_HANDLE_STMT, st->handle, ErrorCode::Connection,
+                              "SQLGetData (chunk) failed");
+        if (ind == SQL_NULL_DATA) {
+            out.isNull = true;
+            out.done = true;
+            return Result<GetDataChunk>(out);
+        }
+        const std::size_t cap = charForm ? bufLen - 1 : bufLen;  // NUL for char
+        if (rc == SQL_SUCCESS_WITH_INFO) {
+            // 01004: truncated -> the buffer's usable capacity was filled and
+            // more data remains.
+            out.bytes = cap;
+            out.done = false;
+        } else {
+            // Final chunk: ind holds the bytes that remained before this call.
+            out.bytes = std::min<std::size_t>(static_cast<std::size_t>(ind), cap);
+            out.done = true;
+        }
+        return Result<GetDataChunk>(out);
     }
+
     Result<std::int64_t> executeStreaming(
         StatementHandle, const std::vector<Value>&,
         std::vector<ParamStreamSource>) override {
@@ -569,6 +635,12 @@ private:
     static Error make_conn_error(const char* msg) {
         Error e;
         e.code = ErrorCode::Connection;
+        e.message = msg;
+        return e;
+    }
+    static Error mapping_err(const char* msg) {
+        Error e;
+        e.code = ErrorCode::Mapping;
         e.message = msg;
         return e;
     }
