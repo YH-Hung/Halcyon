@@ -2,12 +2,13 @@
 
 #include <memory>
 
+#include "halcyon/observability/logging.hpp"
 #include "halcyon/observability/metrics.hpp"
 #include "halcyon/observability/tracing.hpp"
 
 namespace halcyon::obs {
 
-// Observability wiring for a Database/pool. Both pointers default to null, which
+// Observability wiring for a Database/pool. All pointers default to null, which
 // means "no observability" (zero overhead). Populate with adapter-backed sinks
 // (e.g. make_prometheus_metrics / make_otel_tracer) to instrument. Carried as a
 // single field on PoolConfig so it flows through the one existing
@@ -15,6 +16,7 @@ namespace halcyon::obs {
 struct ObservabilityConfig {
     std::shared_ptr<MetricsSink> metrics;
     std::shared_ptr<Tracer> tracer;
+    std::shared_ptr<ILogger> logger;  // null = no structured logging
 };
 
 }  // namespace halcyon::obs
