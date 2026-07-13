@@ -14,6 +14,9 @@
 #include "halcyon/detail/cli/driver.hpp"
 #include "halcyon/detail/statement_cache.hpp"
 #include "halcyon/error.hpp"
+#include "halcyon/isolation.hpp"
+#include "halcyon/lob.hpp"
+#include "halcyon/observability/logging.hpp"
 #include "halcyon/observability/metrics.hpp"
 #include "halcyon/parameters.hpp"
 #include "halcyon/result.hpp"
@@ -27,8 +30,9 @@ namespace detail {
 inline constexpr std::size_t kFetchBlockRows = 4096;
 }  // namespace detail
 
-class ResultSet;    // fwd
-class Transaction;  // fwd (defined in transaction.hpp)
+class ResultSet;           // fwd
+class StreamingResultSet;  // fwd (defined in streaming.hpp)
+class Transaction;         // fwd (defined in transaction.hpp)
 
 /// \brief Non-owning view of one already-materialized cursor row.
 ///
@@ -251,23 +255,30 @@ public:
     static Result<Connection> open(detail::cli::ICliDriver& driver,
                                    const detail::cli::ConnectionParams& params,
                                    std::size_t statementCacheSize = 0,
-                                   obs::MetricsSink* metrics = nullptr) {
+                                   obs::MetricsSink* metrics = nullptr,
+                                   obs::ILogger* logger = nullptr) {
         auto h = driver.connect(params);
         if (!h.ok()) return h.error();
-        return Connection(driver, h.value(), statementCacheSize, metrics);
+        return Connection(driver, h.value(), statementCacheSize, metrics, logger);
     }
 
     Connection(detail::cli::ICliDriver& driver,
                detail::cli::ConnectionHandle handle,
                std::size_t statementCacheSize = 0,
-               obs::MetricsSink* metrics = nullptr)
+               obs::MetricsSink* metrics = nullptr,
+               obs::ILogger* logger = nullptr)
         : driver_(&driver),
           handle_(handle),
+          logger_(logger),
           cache_(std::make_unique<detail::StatementCache>(
-              driver, handle, statementCacheSize, metrics)) {}
+              driver, handle, statementCacheSize, metrics, logger)) {}
 
     Connection(Connection&& o) noexcept
-        : driver_(o.driver_), handle_(o.handle_), cache_(std::move(o.cache_)) {
+        : driver_(o.driver_),
+          handle_(o.handle_),
+          logger_(o.logger_),
+          defaultIsolation_(o.defaultIsolation_),
+          cache_(std::move(o.cache_)) {
         o.handle_ = detail::cli::ConnectionHandle::invalid;
     }
     Connection& operator=(Connection&& o) noexcept {
@@ -275,6 +286,8 @@ public:
             reset();
             driver_ = o.driver_;
             handle_ = o.handle_;
+            logger_ = o.logger_;
+            defaultIsolation_ = o.defaultIsolation_;
             cache_ = std::move(o.cache_);
             o.handle_ = detail::cli::ConnectionHandle::invalid;
         }
@@ -287,6 +300,10 @@ public:
     detail::cli::ConnectionHandle handle() const noexcept { return handle_; }
 
     detail::cli::ICliDriver& driver() const noexcept { return *driver_; }
+
+    // Nullable structured-log sink shared with the owning pool; transactions and
+    // savepoints route poison/lifecycle events here.
+    obs::ILogger* logger() const noexcept { return logger_; }
 
     Result<Statement> prepare(const std::string& sql) {
         auto h = driver_->prepare(handle_, sql);
@@ -309,6 +326,23 @@ public:
         auto lease = cache_->acquire(sql);
         if (!lease.ok()) return lease.error();
         return exec_lease(lease.value(), detail::pack_params(args...));
+    }
+
+    // Streaming execute: any LobSource argument routes through the driver's
+    // data-at-exec path. Sources are single-use — never retried.
+    template <class... Args,
+              std::enable_if_t<detail::stream_pack_ok<Args...>::value, int> = 0>
+    Result<std::int64_t> execute(const std::string& sql, const Args&... args) {
+        auto packed = detail::pack_stream_params(args...);
+        auto lease = cache_->acquire(sql);
+        if (!lease.ok()) return lease.error();
+        auto e = driver_->executeStreaming(lease.value().handle(), packed.values,
+                                           std::move(packed.sources));
+        if (!e.ok()) {
+            lease.value().poison();
+            return e.error();
+        }
+        return e.value();
     }
 
     // --- named-parameter overloads ---
@@ -364,10 +398,40 @@ public:
         return e.value();
     }
 
+    // Applies `level` as this connection's session default and remembers it as
+    // the restore target for per-transaction overrides (Task 7 / spec §4).
+    Result<void> setDefaultIsolation(Isolation level) {
+        auto r = driver_->setIsolation(handle_, level);
+        if (!r.ok()) return r;
+        defaultIsolation_ = level;
+        return r;
+    }
+    std::optional<Isolation> defaultIsolation() const noexcept {
+        return defaultIsolation_;
+    }
+
+    // Streaming query: row-at-a-time cursor with chunked LOB access (no block
+    // buffering). Columns must be read in ascending order per row. Defined in
+    // streaming.hpp.
+    template <class... Args,
+              std::enable_if_t<(is_bindable<Args>::value && ...), int> = 0>
+    Result<StreamingResultSet> queryStreaming(const std::string& sql,
+                                              const Args&... args);
+    Result<StreamingResultSet> queryStreaming(const std::string& sql,
+                                              const params& named);
+
     // Begins a transaction (autocommit OFF). Defined in transaction.hpp.
     Result<Transaction> begin();
 
+    // Begins a transaction at `level`, restoring the connection's default
+    // isolation when the transaction ends by any path. Defined in
+    // transaction.hpp.
+    Result<Transaction> begin(Isolation level);
+
 private:
+    Result<StreamingResultSet> queryStreamingImpl(
+        const std::string& sql, const std::vector<detail::cli::Value>& ps);
+
     Result<std::int64_t> exec_lease(
         detail::StatementLease& lease,
         const std::vector<detail::cli::Value>& params) {
@@ -455,6 +519,8 @@ private:
     }
     detail::cli::ICliDriver* driver_;
     detail::cli::ConnectionHandle handle_;
+    obs::ILogger* logger_ = nullptr;
+    std::optional<Isolation> defaultIsolation_;
     std::unique_ptr<detail::StatementCache> cache_;
 };
 

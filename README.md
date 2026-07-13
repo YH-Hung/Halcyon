@@ -22,9 +22,12 @@ user-supplied dependency governed by IBM's terms.
 - **Transparent reconnect & safe auto-retry** — recovers from transient failures without caller involvement
 - **Async** — `std::future`-based `queryAsync`/`executeAsync`; coroutine-ready for a future C++20 layer
 - **RAII transactions** — guard and functional `transaction(...)` helper
+- **Savepoints & nested transactions** — RAII `Savepoint` guard (`tx.savepoint()`) with validated names, and savepoint-backed `tx.nested(fn)` scopes
+- **Isolation levels** — `halcyon::Isolation` (Db2 terminology UR/CS/RS/RR): pool-wide default and per-transaction overrides, restored on every exit path
 - **Bulk/batch insert** — `executeBatch` uses Db2 CLI array binding: rows are bound column-wise and sent in one execute per chunk, returning the total affected-row count
 - **Block fetch** — reads use Db2 CLI rowset (block) binding (the read-side mirror of array binding): columns are bound once and a block of rows arrives per round-trip; result sets with a LOB/long column transparently fall back to row-at-a-time
-- **Optional observability** — Prometheus metrics and OpenTelemetry tracing, zero overhead when disabled
+- **LOB streaming** — `queryStreaming` + chunked `LobReader` reads and `lobFile`/`lobStream`/`lobCallback` (`.asClob()`) data-at-exec writes, O(chunk) memory in both directions
+- **Optional observability** — Prometheus metrics, OpenTelemetry tracing, and a pluggable structured-logging interface (`obs::ILogger` + dependency-free `StderrLogger`), zero overhead when disabled
 - **Mockable seam** — `ICliDriver` interface keeps all IBM CLI details behind a single boundary; unit tests need no live database
 
 ## Requirements
@@ -262,7 +265,7 @@ auto users = db.queryAsOrThrow<User>("SELECT ...");
 ```
 
 `Error` carries:
-- `ErrorCode` enum (`Connection`, `Timeout`, `Constraint`, `Syntax`, `Deadlock`, `Transient`, `Mapping`, `Pool`, `Unknown`)
+- `ErrorCode` enum (`Connection`, `Timeout`, `Constraint`, `Syntax`, `Deadlock`, `Transient`, `Mapping`, `Pool`, `InvalidArgument`, `InvalidState`, `Unknown`)
 - Raw 5-char SQLSTATE string
 - Native Db2 SQLCODE
 - Human-readable message from `SQLGetDiagRec`

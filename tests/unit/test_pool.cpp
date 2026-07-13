@@ -3,8 +3,10 @@
 #include <atomic>
 #include <chrono>
 #include <future>
+#include <memory>
 #include <thread>
 
+#include "capturing_logger.hpp"
 #include "halcyon/pool.hpp"
 #include "mock_cli_driver.hpp"
 
@@ -381,4 +383,112 @@ TEST(PoolStatementCache, ReconnectStartsWithFreshCache) {
     }
 
     EXPECT_EQ(driver.preparedSql.size(), 2u);  // cache did not survive reconnect
+}
+
+TEST(PoolLogging, ConnectOkAndFailAreLogged) {
+    halcyon::testing::MockCliDriver drv;
+    auto logger = std::make_shared<halcyon::testing::CapturingLogger>();
+    halcyon::PoolConfig cfg;
+    cfg.min = 1;
+    cfg.max = 2;
+    cfg.startMaintenanceThread = false;
+    cfg.observability.logger = logger;
+    auto pool = halcyon::ConnectionPool::create(drv, {"dsn"}, cfg);
+    ASSERT_TRUE(pool.ok());
+    EXPECT_EQ(logger->count("connect.ok"), 1u);
+
+    halcyon::Error boom;
+    boom.code = halcyon::ErrorCode::Connection;
+    boom.message = "refused";
+    boom.sqlstate = "08001";
+    drv.connectErrors.push_back(boom);
+    drv.connectErrors.push_back(boom);
+    drv.connectErrors.push_back(boom);  // exhaust default 3 backoff attempts
+    auto lease1 = pool.value()->acquire();  // idle slot: ok
+    ASSERT_TRUE(lease1.ok());
+    auto lease2 = pool.value()->acquire();  // must connect: fails
+    EXPECT_FALSE(lease2.ok());
+    EXPECT_GE(logger->count("connect.fail"), 1u);
+}
+
+TEST(PoolLogging, ExhaustedAcquireIsLogged) {
+    halcyon::testing::MockCliDriver drv;
+    auto logger = std::make_shared<halcyon::testing::CapturingLogger>();
+    halcyon::PoolConfig cfg;
+    cfg.min = 1;
+    cfg.max = 1;
+    cfg.acquireTimeout = std::chrono::milliseconds(10);
+    cfg.startMaintenanceThread = false;
+    cfg.observability.logger = logger;
+    auto pool = halcyon::ConnectionPool::create(drv, {"dsn"}, cfg);
+    ASSERT_TRUE(pool.ok());
+    auto held = pool.value()->acquire();
+    ASSERT_TRUE(held.ok());
+    auto starved = pool.value()->acquire();
+    EXPECT_FALSE(starved.ok());
+    EXPECT_EQ(logger->count("pool.exhausted"), 1u);
+}
+
+TEST(PoolLogging, ReconnectIsLogged) {
+    halcyon::testing::MockCliDriver drv;
+    auto logger = std::make_shared<halcyon::testing::CapturingLogger>();
+    halcyon::PoolConfig cfg;
+    cfg.min = 1;
+    cfg.max = 1;
+    cfg.validateOnAcquire = true;
+    cfg.startMaintenanceThread = false;
+    cfg.observability.logger = logger;
+    auto pool = halcyon::ConnectionPool::create(drv, {"dsn"}, cfg);
+    ASSERT_TRUE(pool.ok());
+    drv.aliveResults.push_back(false);  // probe says dead -> reconnect in place
+    auto lease = pool.value()->acquire();
+    ASSERT_TRUE(lease.ok());
+    EXPECT_EQ(logger->count("reconnect.attempt"), 1u);
+    EXPECT_EQ(logger->count("reconnect.ok"), 1u);
+}
+
+TEST(PoolLogging, ReapIsLogged) {
+    halcyon::testing::MockCliDriver drv;
+    auto logger = std::make_shared<halcyon::testing::CapturingLogger>();
+    halcyon::PoolConfig cfg;
+    cfg.min = 0;
+    cfg.max = 2;
+    cfg.idleTimeout = std::chrono::milliseconds(0);  // idle slots expire at once
+    cfg.startMaintenanceThread = false;
+    cfg.observability.logger = logger;
+    auto pool = halcyon::ConnectionPool::create(drv, {"dsn"}, cfg);
+    ASSERT_TRUE(pool.ok());
+    { auto lease = pool.value()->acquire(); ASSERT_TRUE(lease.ok()); }  // release -> idle
+    pool.value()->maintain();
+    EXPECT_EQ(logger->count("pool.reap"), 1u);
+}
+
+TEST(PoolIsolation, DefaultIsolationAppliedToEveryConnection) {
+    halcyon::testing::MockCliDriver drv;
+    halcyon::PoolConfig cfg;
+    cfg.min = 2;
+    cfg.max = 2;
+    cfg.startMaintenanceThread = false;
+    cfg.isolation = halcyon::Isolation::ReadStability;
+    auto pool = halcyon::ConnectionPool::create(drv, {"dsn"}, cfg);
+    ASSERT_TRUE(pool.ok());
+    ASSERT_EQ(drv.isolationCalls.size(), 2u);
+    EXPECT_EQ(drv.isolationCalls[0].second, halcyon::Isolation::ReadStability);
+    EXPECT_EQ(drv.isolationCalls[1].second, halcyon::Isolation::ReadStability);
+}
+
+TEST(PoolIsolation, ApplyFailureCountsAsConnectFailure) {
+    halcyon::testing::MockCliDriver drv;
+    halcyon::Error e;
+    e.code = halcyon::ErrorCode::Connection;
+    drv.isolationErrors.push_back(e);
+    drv.isolationErrors.push_back(e);
+    drv.isolationErrors.push_back(e);  // every backoff attempt fails
+    halcyon::PoolConfig cfg;
+    cfg.min = 1;
+    cfg.max = 1;
+    cfg.startMaintenanceThread = false;
+    cfg.isolation = halcyon::Isolation::UncommittedRead;
+    auto pool = halcyon::ConnectionPool::create(drv, {"dsn"}, cfg);
+    EXPECT_FALSE(pool.ok());
 }

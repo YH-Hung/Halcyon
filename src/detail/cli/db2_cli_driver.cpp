@@ -43,6 +43,9 @@ Error make_error(SQLSMALLINT handleType, SQLHANDLE handle, ErrorCode fallback,
     return e;
 }
 
+// Stage buffer for one SQLPutData chunk of a streamed LOB (spec §6 D.2).
+constexpr std::size_t kLobStageBytes = 256 * 1024;
+
 // Maps a neutral Value's SQL type for SQLBindParameter.
 struct BoundParam {
     SQLSMALLINT cType;
@@ -143,7 +146,7 @@ public:
         }
         std::lock_guard<std::mutex> lk(mu_);
         auto h = static_cast<StatementHandle>(++nextStmt_);
-        stmts_[h] = StmtState{s, {}, std::nullopt, false};
+        stmts_[h] = StmtState{s, {}, std::nullopt, false, {}};
         return h;
     }
 
@@ -155,60 +158,7 @@ public:
         st.bound.clear();
         st.bound.resize(params.size());
         for (std::size_t i = 0; i < params.size(); ++i) {
-            BoundParam& bp = st.bound[i];
-            const Value& v = params[i];
-            if (std::holds_alternative<Null>(v)) {
-                bp.cType = SQL_C_CHAR;
-                bp.sqlType = SQL_VARCHAR;
-                bp.length = SQL_NULL_DATA;
-            } else if (auto* b = std::get_if<bool>(&v)) {
-                // Bind as SQL_C_BIT (spec §7): a single 0/1 byte kept in buf,
-                // bound through the generic buffer path below.
-                bp.cType = SQL_C_BIT;
-                bp.sqlType = SQL_BIT;
-                bp.buf.assign(1, static_cast<char>(*b ? 1 : 0));
-                bp.length = 0;
-            } else if (auto* i64 = std::get_if<std::int64_t>(&v)) {
-                bp.cType = SQL_C_SBIGINT;
-                bp.sqlType = SQL_BIGINT;
-                bp.i64 = *i64;
-                bp.length = 0;
-            } else if (auto* d = std::get_if<double>(&v)) {
-                bp.cType = SQL_C_DOUBLE;
-                bp.sqlType = SQL_DOUBLE;
-                bp.dbl = *d;
-                bp.length = 0;
-            } else if (auto* s = std::get_if<std::string>(&v)) {
-                bp.cType = SQL_C_CHAR;
-                bp.sqlType = SQL_VARCHAR;
-                bp.buf.assign(s->begin(), s->end());
-                bp.length = static_cast<SQLLEN>(bp.buf.size());
-            } else {
-                const auto& bytes = std::get<std::vector<std::byte>>(v);
-                bp.cType = SQL_C_BINARY;
-                bp.sqlType = SQL_BINARY;
-                bp.buf.resize(bytes.size());
-                std::memcpy(bp.buf.data(), bytes.data(), bytes.size());
-                bp.length = static_cast<SQLLEN>(bp.buf.size());
-            }
-            SQLPOINTER ptr;
-            SQLLEN bufLen = 0;
-            if (bp.cType == SQL_C_SBIGINT) {
-                ptr = &bp.i64;
-            } else if (bp.cType == SQL_C_DOUBLE) {
-                ptr = &bp.dbl;
-            } else {
-                ptr = bp.buf.empty() ? const_cast<char*>("") : bp.buf.data();
-                bufLen = static_cast<SQLLEN>(bp.buf.size());
-            }
-            SQLRETURN rc = SQLBindParameter(
-                st.handle, static_cast<SQLUSMALLINT>(i + 1), SQL_PARAM_INPUT,
-                bp.cType, bp.sqlType,
-                bp.length == SQL_NULL_DATA ? 0 : static_cast<SQLULEN>(bufLen),
-                0, ptr, bufLen, &bp.length);
-            if (!cli_ok(rc))
-                return make_error(SQL_HANDLE_STMT, st.handle, ErrorCode::Unknown,
-                                  "SQLBindParameter failed");
+            if (auto r = bind_one(st, i, params[i]); !r.ok()) return r;
         }
         return Result<void>();
     }
@@ -493,11 +443,218 @@ public:
                               "SQLSetConnectAttr(AUTOCOMMIT) failed");
         return Result<void>();
     }
+    Result<void> setIsolation(ConnectionHandle conn, Isolation level) override {
+        SQLHDBC dbc = conn_handle(conn);
+        if (dbc == SQL_NULL_HANDLE) return unknown_conn();
+        SQLINTEGER v = SQL_TXN_READ_COMMITTED;
+        switch (level) {
+            case Isolation::UncommittedRead:
+                v = SQL_TXN_READ_UNCOMMITTED;
+                break;
+            case Isolation::CursorStability:
+                v = SQL_TXN_READ_COMMITTED;
+                break;
+            case Isolation::ReadStability:
+                v = SQL_TXN_REPEATABLE_READ;
+                break;
+            case Isolation::RepeatableRead:
+                v = SQL_TXN_SERIALIZABLE;
+                break;
+        }
+        SQLRETURN rc = SQLSetConnectAttr(
+            dbc, SQL_ATTR_TXN_ISOLATION,
+            reinterpret_cast<SQLPOINTER>(static_cast<SQLULEN>(v)),  // NOLINT(performance-no-int-to-ptr)
+            0);
+        if (!cli_ok(rc))
+            return make_error(SQL_HANDLE_DBC, dbc, ErrorCode::Connection,
+                              "SQLSetConnectAttr(SQL_ATTR_TXN_ISOLATION) failed");
+        return Result<void>();
+    }
     Result<void> commit(ConnectionHandle conn) override {
         return end_tran(conn, SQL_COMMIT, "SQLEndTran(COMMIT) failed");
     }
     Result<void> rollback(ConnectionHandle conn) override {
         return end_tran(conn, SQL_ROLLBACK, "SQLEndTran(ROLLBACK) failed");
+    }
+
+    // --- Streaming data path (v1.1) ---
+    // Streaming consumes a cursor via fetchNext+getValue+getDataChunk with NO
+    // column buffers bound (SQL_ATTR_ROW_ARRAY_SIZE stays at its default of 1),
+    // so it must never be mixed with fetchBlock on the same cursor.
+    Result<bool> fetchNext(StatementHandle stmt) override {
+        StmtState* st = stmt_state(stmt);
+        if (st == nullptr) return Result<bool>(unknown_stmt());
+        if (!st->cols) {
+            if (auto d = describe_columns(st); !d.ok()) return d.error();
+        }
+        SQLRETURN rc = SQLFetch(st->handle);
+        if (rc == SQL_NO_DATA) return Result<bool>(false);
+        if (!cli_ok(rc))
+            return make_error(SQL_HANDLE_STMT, st->handle, ErrorCode::Connection,
+                              "SQLFetch (streaming) failed");
+        return Result<bool>(true);
+    }
+
+    Result<Value> getValue(StatementHandle stmt, std::size_t col) override {
+        StmtState* st = stmt_state(stmt);
+        if (st == nullptr) return Result<Value>(unknown_stmt());
+        if (!st->cols) {
+            if (auto d = describe_columns(st); !d.ok()) return d.error();
+        }
+        if (col >= st->cols->size())
+            return Result<Value>(mapping_err("column index out of range"));
+        return read_cell(st, col);
+    }
+
+    Result<GetDataChunk> getDataChunk(StatementHandle stmt, std::size_t col,
+                                      std::byte* buf,
+                                      std::size_t bufLen) override {
+        StmtState* st = stmt_state(stmt);
+        if (st == nullptr) return Result<GetDataChunk>(unknown_stmt());
+        if (!st->cols) {
+            if (auto d = describe_columns(st); !d.ok()) return d.error();
+        }
+        if (col >= st->cols->size())
+            return Result<GetDataChunk>(mapping_err("column index out of range"));
+        // Char-vs-binary predicate mirrors read_column_typed's dispatch: binary
+        // types read as SQL_C_BINARY, everything else as SQL_C_CHAR.
+        const SQLSMALLINT t = (*st->cols)[col].sqlType;
+        const bool charForm = !(t == SQL_BINARY || t == SQL_VARBINARY ||
+                                t == SQL_LONGVARBINARY || t == SQL_BLOB);
+        if (bufLen == 0 || (charForm && bufLen < 2))
+            return Result<GetDataChunk>(mapping_err("chunk buffer too small"));
+        SQLLEN ind = 0;
+        SQLRETURN rc = SQLGetData(st->handle, static_cast<SQLUSMALLINT>(col + 1),
+                                  charForm ? SQL_C_CHAR : SQL_C_BINARY, buf,
+                                  static_cast<SQLLEN>(bufLen), &ind);
+        GetDataChunk out;
+        if (rc == SQL_NO_DATA) {  // cell already fully consumed
+            out.done = true;
+            return Result<GetDataChunk>(out);
+        }
+        if (!cli_ok(rc))
+            return make_error(SQL_HANDLE_STMT, st->handle, ErrorCode::Connection,
+                              "SQLGetData (chunk) failed");
+        if (ind == SQL_NULL_DATA) {
+            out.isNull = true;
+            out.done = true;
+            return Result<GetDataChunk>(out);
+        }
+        const std::size_t cap = charForm ? bufLen - 1 : bufLen;  // NUL for char
+        if (rc == SQL_SUCCESS_WITH_INFO) {
+            // 01004: truncated -> the buffer's usable capacity was filled and
+            // more data remains.
+            out.bytes = cap;
+            out.done = false;
+        } else {
+            // Final chunk: ind holds the bytes that remained before this call.
+            out.bytes = std::min<std::size_t>(static_cast<std::size_t>(ind), cap);
+            out.done = true;
+        }
+        return Result<GetDataChunk>(out);
+    }
+
+    Result<std::int64_t> executeStreaming(
+        StatementHandle stmt, const std::vector<Value>& params,
+        std::vector<ParamStreamSource> sources) override {
+        StmtState* stp = stmt_state(stmt);
+        if (!stp) return Result<std::int64_t>(unknown_stmt());
+        StmtState& st = *stp;
+
+        // Map param index -> source; validate indices.
+        std::vector<const ParamStreamSource*> byIndex(params.size(), nullptr);
+        for (const auto& s : sources) {
+            if (s.paramIndex >= params.size() || !s.pull)
+                return Result<std::int64_t>(
+                    mapping_err("bad data-at-exec stream source index"));
+            byIndex[s.paramIndex] = &s;
+        }
+
+        // Bind every position: regular values through bind_one; streamed
+        // positions as data-at-exec with the param index as the token. The
+        // indicator storage must stay stable until SQLExecute finishes.
+        st.bound.clear();
+        st.bound.resize(params.size());
+        st.streamInds.assign(params.size(), 0);
+        for (std::size_t i = 0; i < params.size(); ++i) {
+            if (const ParamStreamSource* s = byIndex[i]) {
+                st.streamInds[i] =
+                    s->sizeHint
+                        ? SQL_LEN_DATA_AT_EXEC(static_cast<SQLLEN>(*s->sizeHint))
+                        : SQL_DATA_AT_EXEC;
+                SQLRETURN rc = SQLBindParameter(
+                    st.handle, static_cast<SQLUSMALLINT>(i + 1), SQL_PARAM_INPUT,
+                    s->isClob ? SQL_C_CHAR : SQL_C_BINARY,
+                    s->isClob ? SQL_CLOB : SQL_BLOB,
+                    /*ColumnSize=*/s->sizeHint ? static_cast<SQLULEN>(*s->sizeHint)
+                                               : 0,
+                    /*DecimalDigits=*/0,
+                    /*ParameterValuePtr=*/
+                    reinterpret_cast<SQLPOINTER>(  // NOLINT(performance-no-int-to-ptr)
+                        static_cast<std::uintptr_t>(i)),
+                    /*BufferLength=*/0, &st.streamInds[i]);
+                if (!cli_ok(rc))
+                    return make_error(SQL_HANDLE_STMT, st.handle, ErrorCode::Syntax,
+                                      "SQLBindParameter (data-at-exec) failed");
+            } else {
+                if (auto r = bind_one(st, i, params[i]); !r.ok())
+                    return Result<std::int64_t>(r.error());
+            }
+        }
+
+        SQLRETURN rc = SQLExecute(st.handle);
+        std::vector<std::byte> stage(kLobStageBytes);
+        while (rc == SQL_NEED_DATA) {
+            SQLPOINTER token = nullptr;
+            rc = SQLParamData(st.handle, &token);
+            if (rc != SQL_NEED_DATA) break;  // all streams consumed (or error)
+            const std::size_t idx = static_cast<std::size_t>(
+                reinterpret_cast<std::uintptr_t>(token));
+            const ParamStreamSource* s =
+                idx < byIndex.size() ? byIndex[idx] : nullptr;
+            if (s == nullptr) {
+                SQLCancel(st.handle);
+                return Result<std::int64_t>(
+                    mapping_err("unknown data-at-exec token"));
+            }
+            bool anyPut = false;
+            for (;;) {
+                const std::size_t n = s->pull(stage.data(), stage.size());
+                if (n == ParamStreamSource::npos) {
+                    SQLCancel(st.handle);
+                    return Result<std::int64_t>(
+                        mapping_err("LOB source pull failed"));
+                }
+                if (n == 0) break;
+                anyPut = true;
+                SQLRETURN put = SQLPutData(st.handle, stage.data(),
+                                           static_cast<SQLLEN>(n));
+                if (!cli_ok(put)) {
+                    auto err = make_error(SQL_HANDLE_STMT, st.handle,
+                                          ErrorCode::Connection,
+                                          "SQLPutData failed");
+                    SQLCancel(st.handle);
+                    return Result<std::int64_t>(err);
+                }
+            }
+            if (!anyPut) {
+                // Zero-length LOB: one empty SQLPutData marks the value present.
+                SQLRETURN put = SQLPutData(st.handle, stage.data(), 0);
+                if (!cli_ok(put)) {
+                    auto err = make_error(SQL_HANDLE_STMT, st.handle,
+                                          ErrorCode::Connection,
+                                          "SQLPutData(empty) failed");
+                    SQLCancel(st.handle);
+                    return Result<std::int64_t>(err);
+                }
+            }
+        }
+        if (!cli_ok(rc))
+            return make_error(SQL_HANDLE_STMT, st.handle, ErrorCode::Connection,
+                              "SQLExecute (streaming) failed");
+        SQLLEN rows = 0;
+        SQLRowCount(st.handle, &rows);
+        return Result<std::int64_t>(static_cast<std::int64_t>(rows));
     }
 
 private:
@@ -512,11 +669,78 @@ private:
         std::vector<BoundParam> bound;
         std::optional<std::vector<ColMeta>> cols;  // described once per cursor
         bool blockFallback = false;
+        std::vector<SQLLEN> streamInds;  // data-at-exec indicators, stable across execute
     };
+
+    // Sets up st.bound[i] for one ordinary parameter and binds it. The backing
+    // storage in st.bound must stay alive until SQLExecute completes. Shared by
+    // bindParams and executeStreaming's non-streamed positions.
+    Result<void> bind_one(StmtState& st, std::size_t i, const Value& v) {
+        BoundParam& bp = st.bound[i];
+        if (std::holds_alternative<Null>(v)) {
+            bp.cType = SQL_C_CHAR;
+            bp.sqlType = SQL_VARCHAR;
+            bp.length = SQL_NULL_DATA;
+        } else if (auto* b = std::get_if<bool>(&v)) {
+            // Bind as SQL_C_BIT (spec §7): a single 0/1 byte kept in buf,
+            // bound through the generic buffer path below.
+            bp.cType = SQL_C_BIT;
+            bp.sqlType = SQL_BIT;
+            bp.buf.assign(1, static_cast<char>(*b ? 1 : 0));
+            bp.length = 0;
+        } else if (auto* i64 = std::get_if<std::int64_t>(&v)) {
+            bp.cType = SQL_C_SBIGINT;
+            bp.sqlType = SQL_BIGINT;
+            bp.i64 = *i64;
+            bp.length = 0;
+        } else if (auto* d = std::get_if<double>(&v)) {
+            bp.cType = SQL_C_DOUBLE;
+            bp.sqlType = SQL_DOUBLE;
+            bp.dbl = *d;
+            bp.length = 0;
+        } else if (auto* s = std::get_if<std::string>(&v)) {
+            bp.cType = SQL_C_CHAR;
+            bp.sqlType = SQL_VARCHAR;
+            bp.buf.assign(s->begin(), s->end());
+            bp.length = static_cast<SQLLEN>(bp.buf.size());
+        } else {
+            const auto& bytes = std::get<std::vector<std::byte>>(v);
+            bp.cType = SQL_C_BINARY;
+            bp.sqlType = SQL_BINARY;
+            bp.buf.resize(bytes.size());
+            std::memcpy(bp.buf.data(), bytes.data(), bytes.size());
+            bp.length = static_cast<SQLLEN>(bp.buf.size());
+        }
+        SQLPOINTER ptr;
+        SQLLEN bufLen = 0;
+        if (bp.cType == SQL_C_SBIGINT) {
+            ptr = &bp.i64;
+        } else if (bp.cType == SQL_C_DOUBLE) {
+            ptr = &bp.dbl;
+        } else {
+            ptr = bp.buf.empty() ? const_cast<char*>("") : bp.buf.data();
+            bufLen = static_cast<SQLLEN>(bp.buf.size());
+        }
+        SQLRETURN rc = SQLBindParameter(
+            st.handle, static_cast<SQLUSMALLINT>(i + 1), SQL_PARAM_INPUT,
+            bp.cType, bp.sqlType,
+            bp.length == SQL_NULL_DATA ? 0 : static_cast<SQLULEN>(bufLen), 0, ptr,
+            bufLen, &bp.length);
+        if (!cli_ok(rc))
+            return make_error(SQL_HANDLE_STMT, st.handle, ErrorCode::Unknown,
+                              "SQLBindParameter failed");
+        return Result<void>();
+    }
 
     static Error make_conn_error(const char* msg) {
         Error e;
         e.code = ErrorCode::Connection;
+        e.message = msg;
+        return e;
+    }
+    static Error mapping_err(const char* msg) {
+        Error e;
+        e.code = ErrorCode::Mapping;
         e.message = msg;
         return e;
     }
@@ -587,6 +811,12 @@ private:
             default:
                 return get_string(h, col);
         }
+    }
+
+    // Reads one cell of the current row as a neutral Value, dispatching on the
+    // described column type. Shared by the block-fetch fallback and getValue.
+    Result<Value> read_cell(StmtState* st, std::size_t col) {
+        return read_column_typed(st->handle, col, (*st->cols)[col].sqlType);
     }
 
     // Describes every result column once and caches type/width/bounded on the
@@ -694,7 +924,7 @@ private:
             std::vector<Value> row;
             row.reserve(cols.size());
             for (std::size_t c = 0; c < cols.size(); ++c) {
-                auto v = read_column_typed(st->handle, c, cols[c].sqlType);
+                auto v = read_cell(st, c);
                 if (!v.ok()) return v.error();
                 row.push_back(std::move(v.value()));
             }

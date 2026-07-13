@@ -3,16 +3,19 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstddef>
+#include <cstdint>
 #include <deque>
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <thread>
 #include <vector>
 
 #include "halcyon/connection.hpp"
 #include "halcyon/detail/cli/driver.hpp"
 #include "halcyon/error.hpp"
+#include "halcyon/isolation.hpp"
 #include "halcyon/observability/config.hpp"
 #include "halcyon/observability/instrument.hpp"
 #include "halcyon/result.hpp"
@@ -40,6 +43,7 @@ struct PoolConfig {
     bool startMaintenanceThread = true;
     obs::ObservabilityConfig observability{};  // default-null = no-op
     std::size_t statementCacheSize = 64;       // per-connection prepared-stmt LRU; 0 disables
+    std::optional<Isolation> isolation;        // session default; nullopt = server default (CS)
 };
 
 namespace detail {
@@ -203,6 +207,7 @@ public:
                     e.message = "connection acquire timed out";
                     e.retriable = false;
                     pm.acquireWait = true;
+                    pm.exhausted = true;
                     timed_out = true;
                     return e;
                 }
@@ -242,6 +247,10 @@ public:
     bool metrics_enabled() const noexcept { return has_metrics_; }
     bool tracer_enabled() const noexcept { return has_tracer_; }
 
+    // Nullable structured-log sink (resolved once at construction); the facade
+    // reads this so retry events land on the same logger the pool uses.
+    obs::ILogger* logger() const noexcept { return logger_; }
+
     // One maintenance pass: reap expired idle connections (respecting min) and
     // refill back up to min. Public so tests can drive it deterministically.
     void maintain();
@@ -260,6 +269,7 @@ private:
                                                : &obs::noop_tracer();
         has_metrics_ = static_cast<bool>(config_.observability.metrics);
         has_tracer_ = static_cast<bool>(config_.observability.tracer);
+        logger_ = config_.observability.logger.get();
     }
 
     friend class PooledConnection;
@@ -276,6 +286,8 @@ private:
         bool acquireWait = false;
         double acquireSecs = 0;
         int reconnects = 0;
+        bool exhausted = false;  // acquire timed out -> log pool.exhausted
+        int reaped = 0;          // maintain() removals -> log pool.reap
     };
 
     // Records the current idle/active counts. Caller holds mu_ (or is the
@@ -305,6 +317,16 @@ private:
         if (has_tracer_)
             for (int i = 0; i < pm.reconnects; ++i)
                 tracer_->startSpan("halcyon.reconnect", {})->end();
+        if (logger_ != nullptr) {
+            if (pm.exhausted)
+                logger_->log(obs::LogLevel::Warn, "pool.exhausted",
+                             {{"timeout_ms",
+                               static_cast<std::int64_t>(
+                                   config_.acquireTimeout.count())}});
+            if (pm.reaped > 0)
+                logger_->log(obs::LogLevel::Debug, "pool.reap",
+                             {{"count", pm.reaped}});
+        }
     }
 
     // Attempts a physical connect with bounded exponential backoff.
@@ -318,10 +340,24 @@ private:
         for (int attempt = 1; attempt <= attempts; ++attempt) {
             auto c = Connection::open(*driver_, params_,
                                       config_.statementCacheSize,
-                                      has_metrics_ ? metrics_ : nullptr);
-            if (c.ok())
+                                      has_metrics_ ? metrics_ : nullptr,
+                                      logger_);
+            if (c.ok() && config_.isolation) {
+                auto iso = c.value().setDefaultIsolation(*config_.isolation);
+                if (!iso.ok()) c = iso.error();  // treat as a failed attempt
+            }
+            if (c.ok()) {
+                if (logger_ != nullptr)
+                    logger_->log(obs::LogLevel::Info, "connect.ok",
+                                 {{"attempt", attempt}});
                 return std::make_unique<Connection>(std::move(c.value()));
+            }
             last = c.error();
+            if (logger_ != nullptr)
+                logger_->log(obs::LogLevel::Error, "connect.fail",
+                             {{"attempt", attempt},
+                              {"code", to_string(last.code)},
+                              {"sqlstate", last.sqlstate}});
             if (attempt < attempts)
                 config_.backoff.sleep(config_.backoff.delay_for(attempt));
         }
@@ -360,7 +396,16 @@ private:
             lk.lock();
             return Result<void>();
         }
+        if (logger_ != nullptr)
+            logger_->log(obs::LogLevel::Warn, "reconnect.attempt", {});
         auto c = make_connection();
+        if (logger_ != nullptr) {
+            if (c.ok())
+                logger_->log(obs::LogLevel::Info, "reconnect.ok", {});
+            else
+                logger_->log(obs::LogLevel::Error, "reconnect.fail",
+                             {{"code", to_string(c.error().code)}});
+        }
         lk.lock();
         if (!c.ok()) return c.error();
         s->conn = std::move(c.value());
@@ -429,6 +474,7 @@ private:
     obs::Tracer* tracer_ = nullptr;
     bool has_metrics_ = false;
     bool has_tracer_ = false;
+    obs::ILogger* logger_ = nullptr;  // nullable; shared_ptr in config_ keeps it alive
 };
 
 inline void PooledConnection::release() {
@@ -451,6 +497,7 @@ inline void ConnectionPool::maintain() {
         const bool over_min = slots_.size() > config_.min;
         if (expired_life || (expired_idle && over_min)) {
             remove_slot_locked(s);  // Connection dtor disconnects
+            ++pm.reaped;
         } else {
             keep.push_back(s);
         }

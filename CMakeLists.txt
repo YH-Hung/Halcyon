@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(Halcyon VERSION 1.0.0 LANGUAGES CXX)
+project(Halcyon VERSION 1.1.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -57,7 +57,8 @@ add_library(halcyon
     src/core/version.cpp
     src/core/error.cpp
     src/detail/cli/sqlstate.cpp
-    src/detail/cli/db2_cli_driver.cpp)
+    src/detail/cli/db2_cli_driver.cpp
+    src/observability/stderr_logger.cpp)
 add_library(halcyon::halcyon ALIAS halcyon)
 
 target_include_directories(halcyon

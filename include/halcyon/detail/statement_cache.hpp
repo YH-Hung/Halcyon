@@ -7,6 +7,7 @@
 #include <utility>
 
 #include "halcyon/detail/cli/driver.hpp"
+#include "halcyon/observability/logging.hpp"
 #include "halcyon/observability/metrics.hpp"
 #include "halcyon/result.hpp"
 
@@ -90,8 +91,13 @@ private:
 class StatementCache {
 public:
     StatementCache(cli::ICliDriver& driver, cli::ConnectionHandle conn,
-                   std::size_t capacity, obs::MetricsSink* metrics = nullptr)
-        : driver_(&driver), conn_(conn), capacity_(capacity), metrics_(metrics) {}
+                   std::size_t capacity, obs::MetricsSink* metrics = nullptr,
+                   obs::ILogger* logger = nullptr)
+        : driver_(&driver),
+          conn_(conn),
+          capacity_(capacity),
+          metrics_(metrics),
+          logger_(logger) {}
 
     StatementCache(const StatementCache&) = delete;
     StatementCache& operator=(const StatementCache&) = delete;
@@ -173,6 +179,10 @@ private:
     }
 
     void evict(StmtCacheEntry* e) {
+        // Log before erase_entry(e) destroys the entry (and its key string).
+        if (logger_ != nullptr)
+            logger_->log(obs::LogLevel::Debug, "stmt_cache.evict",
+                         {{"sql", e->key}});
         driver_->finalize(e->handle);
         erase_entry(e);
         emit("evict");
@@ -219,6 +229,7 @@ private:
     cli::ConnectionHandle conn_;
     std::size_t capacity_;
     obs::MetricsSink* metrics_;
+    obs::ILogger* logger_;
     std::list<StmtCacheEntry> lru_;  // front = most-recently-used
     std::unordered_map<std::string, std::list<StmtCacheEntry>::iterator> index_;
 };

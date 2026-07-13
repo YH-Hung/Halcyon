@@ -24,6 +24,7 @@
 #include "halcyon/pool.hpp"
 #include "halcyon/result.hpp"
 #include "halcyon/retry.hpp"
+#include "halcyon/streaming.hpp"
 #include "halcyon/transaction.hpp"
 #include "halcyon/types.hpp"
 
@@ -165,6 +166,47 @@ private:
     std::shared_ptr<ConnectionPool> pool_;
     PooledConnection lease_;
     ResultSet rs_;
+};
+
+/// \brief A StreamingResultSet plus the pooled lease it runs on, returned by
+/// Database::queryStreaming(). Move-only; rows stream while the lease is
+/// held. Single-attempt (streaming queries are never auto-retried).
+class StreamingQueryResult {
+public:
+    StreamingQueryResult(StreamingQueryResult&&) noexcept = default;
+    StreamingQueryResult& operator=(StreamingQueryResult&&) noexcept = default;
+    StreamingQueryResult(const StreamingQueryResult&) = delete;
+    StreamingQueryResult& operator=(const StreamingQueryResult&) = delete;
+    ~StreamingQueryResult() {
+        // A mid-stream connection-class failure means the leased connection is
+        // dead — discard it instead of returning it to the pool.
+        if (lease_.get()) {
+            const auto& e = rs_.error();
+            if (e && e->code == ErrorCode::Connection) lease_.markBroken();
+        }
+    }
+
+    std::optional<StreamingRow> next() { return rs_.next(); }
+    std::size_t column_count() const noexcept { return rs_.column_count(); }
+    bool ok() const noexcept { return rs_.ok(); }
+    const std::optional<Error>& error() const noexcept { return rs_.error(); }
+
+private:
+    friend class Database;
+    StreamingQueryResult(std::shared_ptr<detail::cli::ICliDriver> driver,
+                         std::shared_ptr<ConnectionPool> pool,
+                         PooledConnection lease, StreamingResultSet rs)
+        : owned_driver_(std::move(driver)),
+          pool_(std::move(pool)),
+          lease_(std::move(lease)),
+          rs_(std::move(rs)) {}
+
+    // Same lifetime contract and destruction order as QueryResult: rs_ (closes
+    // the cursor) -> lease_ (returns the connection) -> pool_ -> owned_driver_.
+    std::shared_ptr<detail::cli::ICliDriver> owned_driver_;
+    std::shared_ptr<ConnectionPool> pool_;
+    PooledConnection lease_;
+    StreamingResultSet rs_;
 };
 
 /// \brief A Transaction plus the pooled lease it runs on, returned by `Database::begin()`.
@@ -326,6 +368,20 @@ public:
                               });
                           });
     }
+    // Streaming execute (LobSource args). Always a single attempt: a LOB
+    // source's stream is consumed by the first try and cannot be replayed.
+    template <class... Args,
+              std::enable_if_t<detail::stream_pack_ok<Args...>::value, int> = 0>
+    Result<std::int64_t> execute(const std::string& sql, const Args&... args) {
+        return instrument(metrics_, tracer_, has_metrics_, has_tracer_,
+                          "halcyon.execute", sql, [&] {
+                              return run_with_policy(ExecPolicy::once(),
+                                                     [&](Connection& c) {
+                                                         return c.execute(sql,
+                                                                          args...);
+                                                     });
+                          });
+    }
 
     // --- query (returns a lease-owning QueryResult) ---
     template <class... Args,
@@ -343,6 +399,28 @@ public:
                           "halcyon.query", sql, [&] {
                               return query_impl(default_policy(sql), [&](Connection& c) {
                                   return c.query(sql, named);
+                              });
+                          });
+    }
+
+    // --- streaming query (row-at-a-time cursor, chunked LOB reads) ---
+    template <class... Args,
+              std::enable_if_t<(is_bindable<Args>::value && ...), int> = 0>
+    Result<StreamingQueryResult> queryStreaming(const std::string& sql,
+                                                const Args&... args) {
+        return instrument(metrics_, tracer_, has_metrics_, has_tracer_,
+                          "halcyon.query", sql, [&] {
+                              return stream_impl([&](Connection& c) {
+                                  return c.queryStreaming(sql, args...);
+                              });
+                          });
+    }
+    Result<StreamingQueryResult> queryStreaming(const std::string& sql,
+                                                const params& named) {
+        return instrument(metrics_, tracer_, has_metrics_, has_tracer_,
+                          "halcyon.query", sql, [&] {
+                              return stream_impl([&](Connection& c) {
+                                  return c.queryStreaming(sql, named);
                               });
                           });
     }
@@ -420,40 +498,34 @@ public:
                                  std::move(tx.value()));
     }
 
+    // Begins a transaction at `level` on a freshly leased connection; the
+    // connection's default isolation is restored when the unit of work ends.
+    Result<ScopedTransaction> begin(Isolation level) {
+        auto lease = pool_->acquire();
+        if (!lease.ok()) return lease.error();
+        auto tx = lease.value()->begin(level);
+        if (!tx.ok()) {
+            lease.value().markBroken();
+            return tx.error();
+        }
+        return ScopedTransaction(owned_driver_, pool_, std::move(lease.value()),
+                                 std::move(tx.value()));
+    }
+
     // Functional transaction: commit on a successful Result, rollback on an
     // error Result or a thrown exception (then rethrow). fn must return
     // Result<U>.
     template <class Fn>
     auto transaction(Fn&& fn) -> std::invoke_result_t<Fn, Transaction&> {
-        using R = std::invoke_result_t<Fn, Transaction&>;
-        obs::ScopedSpan span =
-            has_tracer_ ? obs::ScopedSpan(tracer_->startSpan(
-                              "halcyon.transaction", {{"db.system", "db2"}}))
-                        : obs::ScopedSpan();
-        auto st = begin();
-        if (!st.ok()) {
-            span.setStatusError(st.error().sqlstate);
-            return R(st.error());
-        }
-        R r = [&]() -> R {
-            try {
-                return std::forward<Fn>(fn)(*st.value());
-            } catch (...) {
-                st.value().rollback();
-                throw;
-            }
-        }();
-        if (r.ok()) {
-            auto c = st.value().commit();
-            if (!c.ok()) {
-                span.setStatusError(c.error().sqlstate);
-                return R(c.error());
-            }
-        } else {
-            span.setStatusError(r.error().sqlstate);
-            st.value().rollback();
-        }
-        return r;
+        return run_transaction([this] { return begin(); },
+                               std::forward<Fn>(fn));
+    }
+    // As above, but runs the unit of work at `level`.
+    template <class Fn>
+    auto transaction(Isolation level, Fn&& fn)
+        -> std::invoke_result_t<Fn, Transaction&> {
+        return run_transaction([this, level] { return begin(level); },
+                               std::forward<Fn>(fn));
     }
 
     // --- async (std::future, backed by a shared Executor) ---
@@ -631,8 +703,68 @@ private:
     // discards it) so the retry connects anew.
     // Emits halcyon_retries_total: {outcome=retried} before each replay,
     // {outcome=exhausted} when a retried op finally fails out of attempts.
-    static void emit_retry(obs::MetricsSink* m, bool hasM, const char* outcome) {
+    // Shared functional-transaction body: opens the transaction span, begins the
+    // unit of work through `beginFn` (so the acquire span nests under the txn
+    // span), then wraps `fn` (commit on ok, rollback on error/exception). Keeps
+    // transaction(fn) and transaction(iso, fn) DRY. `beginFn` returns
+    // Result<ScopedTransaction>.
+    template <class Begin, class Fn>
+    auto run_transaction(Begin&& beginFn, Fn&& fn)
+        -> std::invoke_result_t<Fn, Transaction&> {
+        using R = std::invoke_result_t<Fn, Transaction&>;
+        obs::ScopedSpan span =
+            has_tracer_ ? obs::ScopedSpan(tracer_->startSpan(
+                              "halcyon.transaction", {{"db.system", "db2"}}))
+                        : obs::ScopedSpan();
+        auto st = beginFn();  // acquire nests under the active transaction span
+        if (!st.ok()) {
+            span.setStatusError(st.error().sqlstate);
+            return R(st.error());
+        }
+        R r = [&]() -> R {
+            try {
+                return std::forward<Fn>(fn)(*st.value());
+            } catch (...) {
+                st.value().rollback();
+                throw;
+            }
+        }();
+        if (r.ok()) {
+            auto c = st.value().commit();
+            if (!c.ok()) {
+                span.setStatusError(c.error().sqlstate);
+                return R(c.error());
+            }
+        } else {
+            span.setStatusError(r.error().sqlstate);
+            st.value().rollback();
+        }
+        return r;
+    }
+
+    // Single-attempt streaming query: acquires a lease and hands it to the
+    // returned StreamingQueryResult. No auto-retry (documented).
+    template <class Op>
+    Result<StreamingQueryResult> stream_impl(Op&& op) {
+        auto lease = pool_->acquire();
+        if (!lease.ok()) return lease.error();
+        auto rs = op(*lease.value());
+        if (!rs.ok()) {
+            if (rs.error().code == ErrorCode::Connection)
+                lease.value().markBroken();
+            return rs.error();
+        }
+        return StreamingQueryResult(owned_driver_, pool_,
+                                    std::move(lease.value()),
+                                    std::move(rs.value()));
+    }
+
+    static void emit_retry(ConnectionPool& pool, obs::MetricsSink* m, bool hasM,
+                           const char* outcome) {
         if (hasM) m->counter("halcyon_retries_total", 1.0, {{"outcome", outcome}});
+        if (pool.logger() != nullptr)
+            pool.logger()->log(obs::LogLevel::Warn, "retry.attempt",
+                               {{"outcome", outcome}});
     }
 
     template <class Op>
@@ -653,10 +785,10 @@ private:
             if (last.code == ErrorCode::Connection) lease.value().markBroken();
             if (!last.retriable || attempt == policy.maxAttempts) {
                 if (attempt > 1 && attempt == policy.maxAttempts)
-                    emit_retry(m, hasM, "exhausted");
+                    emit_retry(pool, m, hasM, "exhausted");
                 return r;
             }
-            emit_retry(m, hasM, "retried");
+            emit_retry(pool, m, hasM, "retried");
             policy.backoff.sleep(policy.backoff.delay_for(attempt));
         }
         return R(last);
@@ -686,10 +818,10 @@ private:
             if (last.code == ErrorCode::Connection) lease.value().markBroken();
             if (!last.retriable || attempt == policy.maxAttempts) {
                 if (attempt > 1 && attempt == policy.maxAttempts)
-                    emit_retry(m, hasM, "exhausted");
+                    emit_retry(*pool, m, hasM, "exhausted");
                 break;
             }
-            emit_retry(m, hasM, "retried");
+            emit_retry(*pool, m, hasM, "retried");
             policy.backoff.sleep(policy.backoff.delay_for(attempt));
         }
         return last;
@@ -737,6 +869,10 @@ auto query_as(Database& db, const std::string& sql, const params& named) {
 template <class Fn>
 auto transaction(Database& db, Fn&& fn) {
     return db.transaction(std::forward<Fn>(fn));
+}
+template <class Fn>
+auto transaction(Database& db, Isolation level, Fn&& fn) {
+    return db.transaction(level, std::forward<Fn>(fn));
 }
 
 }  // namespace halcyon
