@@ -641,6 +641,12 @@ private:
         }
     }
 
+    // Reads one cell of the current row as a neutral Value, dispatching on the
+    // described column type. Shared by the block-fetch fallback and getValue.
+    Result<Value> read_cell(StmtState* st, std::size_t col) {
+        return read_column_typed(st->handle, col, (*st->cols)[col].sqlType);
+    }
+
     // Describes every result column once and caches type/width/bounded on the
     // statement. bounded=false (long/LOB or unknown/over-cap width) routes the
     // whole statement onto the per-row fallback.
@@ -746,7 +752,7 @@ private:
             std::vector<Value> row;
             row.reserve(cols.size());
             for (std::size_t c = 0; c < cols.size(); ++c) {
-                auto v = read_column_typed(st->handle, c, cols[c].sqlType);
+                auto v = read_cell(st, c);
                 if (!v.ok()) return v.error();
                 row.push_back(std::move(v.value()));
             }
