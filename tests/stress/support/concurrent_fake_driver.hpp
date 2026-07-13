@@ -188,6 +188,24 @@ public:
     Result<void> setIsolation(ConnectionHandle, Isolation) override {
         return Result<void>();
     }
+
+    // --- Streaming data path (v1.1): not exercised by the stress suite ---
+    Result<bool> fetchNext(StatementHandle) override {
+        return Result<bool>(false);
+    }
+    Result<Value> getValue(StatementHandle, std::size_t) override {
+        return Result<Value>(unsupported("getValue"));
+    }
+    Result<detail::cli::GetDataChunk> getDataChunk(StatementHandle, std::size_t,
+                                                   std::byte*,
+                                                   std::size_t) override {
+        return Result<detail::cli::GetDataChunk>(unsupported("getDataChunk"));
+    }
+    Result<std::int64_t> executeStreaming(
+        StatementHandle, const std::vector<Value>&,
+        std::vector<detail::cli::ParamStreamSource>) override {
+        return Result<std::int64_t>(unsupported("executeStreaming"));
+    }
     Result<void> commit(ConnectionHandle) override {
         ++commitCalls;
         return Result<void>();
@@ -220,6 +238,13 @@ private:
 
     // Leading non-space token is SELECT or VALUES (the fake never sees real DML
     // result sets; DML returns an affected-row count instead).
+    static Error unsupported(const char* what) {
+        Error e;
+        e.code = ErrorCode::Unknown;
+        e.message = std::string(what) + " unsupported in ConcurrentFakeDriver";
+        return e;
+    }
+
     static bool is_select(const std::string& sql) {
         std::size_t i = 0;
         while (i < sql.size() && std::isspace(static_cast<unsigned char>(sql[i])))

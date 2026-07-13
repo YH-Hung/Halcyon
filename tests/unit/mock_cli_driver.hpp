@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <deque>
 #include <functional>
 #include <map>
@@ -35,6 +36,7 @@ public:
         std::vector<Value> boundParams;
         ScriptedRows cursor;
         long position = -1;  // -1 before first fetch
+        std::vector<std::size_t> lobOffsets;  // per-column getDataChunk progress
     };
 
     // --- connect scripting (Plan 1) ---
@@ -257,6 +259,126 @@ public:
             return Result<void>(e);
         }
         return Result<void>();
+    }
+
+    // --- streaming scripting (v1.1) ---
+    std::deque<Error> fetchNextErrors;
+    std::deque<Error> getDataChunkErrors;
+    std::deque<Error> executeStreamingErrors;
+    std::deque<std::int64_t> streamRowCounts;
+    std::size_t lobChunkCap = 0;    // max bytes per getDataChunk; 0 = fill buf
+    std::size_t streamPullCap = 8;  // mock's pull buffer, small to force chunking
+    int fetchNextCalls = 0;
+    int getDataChunkCalls = 0;
+    int executeStreamingCalls = 0;
+    std::vector<Value> lastStreamValues;
+    std::map<std::size_t, std::vector<std::byte>> lastStreamedLobs;
+
+    Result<bool> fetchNext(StatementHandle stmt) override {
+        ++fetchNextCalls;
+        if (!fetchNextErrors.empty()) {
+            Error e = fetchNextErrors.front();
+            fetchNextErrors.pop_front();
+            return Result<bool>(e);
+        }
+        auto& s = statements.at(stmt);
+        if (s.position + 1 >= static_cast<long>(s.cursor.rows.size()))
+            return Result<bool>(false);
+        ++s.position;
+        s.lobOffsets.assign(s.cursor.columns.size(), 0);
+        return Result<bool>(true);
+    }
+
+    Result<Value> getValue(StatementHandle stmt, std::size_t col) override {
+        auto& s = statements.at(stmt);
+        if (s.position < 0 ||
+            s.position >= static_cast<long>(s.cursor.rows.size()) ||
+            col >= s.cursor.rows[static_cast<std::size_t>(s.position)].size())
+            return Result<Value>(rangeError());
+        return Result<Value>(
+            s.cursor.rows[static_cast<std::size_t>(s.position)][col]);
+    }
+
+    Result<detail::cli::GetDataChunk> getDataChunk(StatementHandle stmt,
+                                                   std::size_t col,
+                                                   std::byte* buf,
+                                                   std::size_t bufLen) override {
+        ++getDataChunkCalls;
+        if (!getDataChunkErrors.empty()) {
+            Error e = getDataChunkErrors.front();
+            getDataChunkErrors.pop_front();
+            return Result<detail::cli::GetDataChunk>(e);
+        }
+        auto& s = statements.at(stmt);
+        if (s.position < 0 ||
+            col >= s.cursor.rows[static_cast<std::size_t>(s.position)].size())
+            return Result<detail::cli::GetDataChunk>(rangeError());
+        const Value& cell =
+            s.cursor.rows[static_cast<std::size_t>(s.position)][col];
+        detail::cli::GetDataChunk out;
+        if (std::holds_alternative<detail::cli::Null>(cell)) {
+            out.isNull = true;
+            out.done = true;
+            return Result<detail::cli::GetDataChunk>(out);
+        }
+        // Serve string or binary cells as raw bytes from the per-column offset.
+        const char* data = nullptr;
+        std::size_t size = 0;
+        if (const auto* str = std::get_if<std::string>(&cell)) {
+            data = str->data();
+            size = str->size();
+        } else if (const auto* bin = std::get_if<std::vector<std::byte>>(&cell)) {
+            data = reinterpret_cast<const char*>(bin->data());
+            size = bin->size();
+        } else {
+            return Result<detail::cli::GetDataChunk>(rangeError());
+        }
+        if (s.lobOffsets.size() <= col) s.lobOffsets.resize(col + 1, 0);
+        std::size_t& off = s.lobOffsets[col];
+        std::size_t n = std::min(bufLen, size - off);
+        if (lobChunkCap != 0) n = std::min(n, lobChunkCap);
+        std::memcpy(buf, data + off, n);
+        off += n;
+        out.bytes = n;
+        out.done = (off == size);
+        return Result<detail::cli::GetDataChunk>(out);
+    }
+
+    Result<std::int64_t> executeStreaming(
+        StatementHandle stmt, const std::vector<Value>& params,
+        std::vector<detail::cli::ParamStreamSource> sources) override {
+        ++executeStreamingCalls;
+        (void)stmt;
+        lastStreamValues = params;
+        lastStreamedLobs.clear();
+        if (!executeStreamingErrors.empty()) {
+            Error e = executeStreamingErrors.front();
+            executeStreamingErrors.pop_front();
+            return Result<std::int64_t>(e);
+        }
+        std::vector<std::byte> stage(streamPullCap);
+        for (const auto& src : sources) {
+            std::vector<std::byte> all;
+            for (;;) {
+                const std::size_t n = src.pull(stage.data(), stage.size());
+                if (n == detail::cli::ParamStreamSource::npos) {
+                    Error e;
+                    e.code = ErrorCode::Mapping;
+                    e.message = "LOB source pull failed";
+                    return Result<std::int64_t>(e);
+                }
+                if (n == 0) break;
+                all.insert(all.end(), stage.begin(),
+                           stage.begin() + static_cast<std::ptrdiff_t>(n));
+            }
+            lastStreamedLobs[src.paramIndex] = std::move(all);
+        }
+        if (!streamRowCounts.empty()) {
+            std::int64_t n = streamRowCounts.front();
+            streamRowCounts.pop_front();
+            return Result<std::int64_t>(n);
+        }
+        return Result<std::int64_t>(std::int64_t{1});
     }
 
 private:

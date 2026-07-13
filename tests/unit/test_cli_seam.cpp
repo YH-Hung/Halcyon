@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include <cstddef>
+#include <cstring>
 #include <vector>
 
 #include "halcyon/detail/cli/driver.hpp"
@@ -193,4 +194,109 @@ TEST(CliSeam, SetIsolationIsRecordedAndScriptable) {
     auto bad = drv.setIsolation(conn.value(), halcyon::Isolation::CursorStability);
     EXPECT_FALSE(bad.ok());
     EXPECT_EQ(bad.error().code, halcyon::ErrorCode::Connection);
+}
+
+namespace {
+
+std::vector<std::byte> bytes_of(const std::string& s) {
+    std::vector<std::byte> out(s.size());
+    std::memcpy(out.data(), s.data(), s.size());
+    return out;
+}
+
+}  // namespace
+
+TEST(CliSeamStreaming, FetchNextWalksScriptedRows) {
+    halcyon::testing::MockCliDriver drv;
+    auto conn = drv.connect({"dsn"});
+    auto stmt = drv.prepare(conn.value(), "SELECT id, doc FROM t");
+    drv.resultSets.push_back(
+        {{"id", "doc"},
+         {{halcyon::detail::cli::Value{std::int64_t{1}},
+           halcyon::detail::cli::Value{std::string{"hello world"}}},
+          {halcyon::detail::cli::Value{std::int64_t{2}},
+           halcyon::detail::cli::Value{halcyon::detail::cli::Null{}}}}});
+    ASSERT_TRUE(drv.execute(stmt.value()).ok());
+    EXPECT_TRUE(drv.fetchNext(stmt.value()).value());
+    auto id = drv.getValue(stmt.value(), 0);
+    ASSERT_TRUE(id.ok());
+    EXPECT_EQ(std::get<std::int64_t>(id.value()), 1);
+    EXPECT_TRUE(drv.fetchNext(stmt.value()).value());
+    EXPECT_FALSE(drv.fetchNext(stmt.value()).value());  // exhausted
+}
+
+TEST(CliSeamStreaming, GetDataChunkHonorsChunkCapAndSignalsDone) {
+    halcyon::testing::MockCliDriver drv;
+    auto conn = drv.connect({"dsn"});
+    auto stmt = drv.prepare(conn.value(), "SELECT doc FROM t");
+    drv.resultSets.push_back(
+        {{"doc"}, {{halcyon::detail::cli::Value{std::string{"abcdefgh"}}}}});
+    ASSERT_TRUE(drv.execute(stmt.value()).ok());
+    ASSERT_TRUE(drv.fetchNext(stmt.value()).value());
+    drv.lobChunkCap = 3;
+    std::byte buf[16];
+    std::string got;
+    for (;;) {
+        auto c = drv.getDataChunk(stmt.value(), 0, buf, sizeof(buf));
+        ASSERT_TRUE(c.ok());
+        got.append(reinterpret_cast<const char*>(buf), c.value().bytes);
+        if (c.value().done) break;
+    }
+    EXPECT_EQ(got, "abcdefgh");
+}
+
+TEST(CliSeamStreaming, GetDataChunkReportsNull) {
+    halcyon::testing::MockCliDriver drv;
+    auto conn = drv.connect({"dsn"});
+    auto stmt = drv.prepare(conn.value(), "SELECT doc FROM t");
+    drv.resultSets.push_back(
+        {{"doc"}, {{halcyon::detail::cli::Value{halcyon::detail::cli::Null{}}}}});
+    ASSERT_TRUE(drv.execute(stmt.value()).ok());
+    ASSERT_TRUE(drv.fetchNext(stmt.value()).value());
+    std::byte buf[8];
+    auto c = drv.getDataChunk(stmt.value(), 0, buf, sizeof(buf));
+    ASSERT_TRUE(c.ok());
+    EXPECT_TRUE(c.value().isNull);
+    EXPECT_TRUE(c.value().done);
+    EXPECT_EQ(c.value().bytes, 0u);
+}
+
+TEST(CliSeamStreaming, ExecuteStreamingPullsSourcesInChunks) {
+    halcyon::testing::MockCliDriver drv;
+    auto conn = drv.connect({"dsn"});
+    auto stmt = drv.prepare(conn.value(), "INSERT INTO t VALUES (?, ?)");
+    const std::string payload = "0123456789ABCDEF";  // 16 bytes; pull cap 8 -> 2 pulls
+    std::size_t offset = 0;
+    halcyon::detail::cli::ParamStreamSource src;
+    src.paramIndex = 1;
+    src.pull = [&](std::byte* buf, std::size_t cap) -> std::size_t {
+        const std::size_t n = std::min(cap, payload.size() - offset);
+        std::memcpy(buf, payload.data() + offset, n);
+        offset += n;
+        return n;
+    };
+    std::vector<halcyon::detail::cli::Value> params{
+        halcyon::detail::cli::Value{std::int64_t{7}},
+        halcyon::detail::cli::Value{halcyon::detail::cli::Null{}}};
+    auto r = drv.executeStreaming(stmt.value(), params, {src});
+    ASSERT_TRUE(r.ok());
+    ASSERT_EQ(drv.lastStreamedLobs.count(1), 1u);
+    EXPECT_EQ(drv.lastStreamedLobs[1], bytes_of(payload));
+    EXPECT_EQ(std::get<std::int64_t>(drv.lastStreamValues[0]), 7);
+}
+
+TEST(CliSeamStreaming, ExecuteStreamingSourceFailureIsMappingError) {
+    halcyon::testing::MockCliDriver drv;
+    auto conn = drv.connect({"dsn"});
+    auto stmt = drv.prepare(conn.value(), "INSERT INTO t VALUES (?)");
+    halcyon::detail::cli::ParamStreamSource src;
+    src.paramIndex = 0;
+    src.pull = [](std::byte*, std::size_t) {
+        return halcyon::detail::cli::ParamStreamSource::npos;
+    };
+    std::vector<halcyon::detail::cli::Value> params{
+        halcyon::detail::cli::Value{halcyon::detail::cli::Null{}}};
+    auto r = drv.executeStreaming(stmt.value(), params, {src});
+    ASSERT_FALSE(r.ok());
+    EXPECT_EQ(r.error().code, halcyon::ErrorCode::Mapping);
 }

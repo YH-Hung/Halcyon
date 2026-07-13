@@ -43,6 +43,14 @@ Error make_error(SQLSMALLINT handleType, SQLHANDLE handle, ErrorCode fallback,
     return e;
 }
 
+// Placeholder for the streaming seam methods until Tasks 17-18 implement them.
+Error not_implemented(const char* what) {
+    Error e;
+    e.code = ErrorCode::Unknown;
+    e.message = std::string(what) + " not implemented yet (v1.1 Tasks 17-18)";
+    return e;
+}
+
 // Maps a neutral Value's SQL type for SQLBindParameter.
 struct BoundParam {
     SQLSMALLINT cType;
@@ -525,6 +533,23 @@ public:
     }
     Result<void> rollback(ConnectionHandle conn) override {
         return end_tran(conn, SQL_ROLLBACK, "SQLEndTran(ROLLBACK) failed");
+    }
+
+    // --- Streaming data path (v1.1) — real implementations land in Tasks 17-18.
+    Result<bool> fetchNext(StatementHandle) override {
+        return Result<bool>(not_implemented("fetchNext"));
+    }
+    Result<Value> getValue(StatementHandle, std::size_t) override {
+        return Result<Value>(not_implemented("getValue"));
+    }
+    Result<GetDataChunk> getDataChunk(StatementHandle, std::size_t, std::byte*,
+                                      std::size_t) override {
+        return Result<GetDataChunk>(not_implemented("getDataChunk"));
+    }
+    Result<std::int64_t> executeStreaming(
+        StatementHandle, const std::vector<Value>&,
+        std::vector<ParamStreamSource>) override {
+        return Result<std::int64_t>(not_implemented("executeStreaming"));
     }
 
 private:
