@@ -1,5 +1,6 @@
 add_executable(halcyon_integration_tests
-    test_db2_roundtrip.cpp)
+    test_db2_roundtrip.cpp
+    test_db2_savepoints_isolation.cpp)
 
 target_link_libraries(halcyon_integration_tests
     PRIVATE halcyon::halcyon GTest::gtest_main)
