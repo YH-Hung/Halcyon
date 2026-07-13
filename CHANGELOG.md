@@ -7,6 +7,32 @@ public C++ API (see "Versioning & compatibility" in the README).
 
 ## Unreleased
 
+## 1.1.0 - 2026-07-13
+
+Transactions & large data. No GitHub Release or `v1.1.0` tag has been published
+yet; consumers should pin `main`, a reviewed commit, or a release tag once one
+exists.
+
+### Added
+- Savepoints: RAII `Savepoint` guard (`Transaction::savepoint()`) with
+  validated names, and savepoint-backed nested scopes
+  (`Transaction::nested(fn)`).
+- Isolation levels: `halcyon::Isolation` (Db2 terminology — UR/CS/RS/RR),
+  pool-wide default (`PoolConfig::isolation`) and per-transaction overrides
+  (`begin(iso)`, `transaction(iso, fn)`) restored on every exit path.
+- LOB streaming: `queryStreaming` + `LobReader` chunked reads;
+  `lobFile`/`lobStream`/`lobCallback` (+ `.asClob()`) data-at-exec writes.
+  O(chunk) memory in both directions; positional binds; never auto-retried.
+- Pluggable structured logging: `obs::ILogger` + `LogField` behind
+  `ObservabilityConfig::logger`, with a dependency-free `StderrLogger`
+  reference adapter. Zero overhead when unset.
+- New error codes `InvalidArgument` and `InvalidState`.
+
+### Changed
+- For seam implementers only: `detail::cli::ICliDriver` gained five pure
+  virtual methods (`setIsolation`, `fetchNext`, `getValue`, `getDataChunk`,
+  `executeStreaming`). `detail/` is outside the public compatibility policy.
+
 ## 1.0.0 - 2026-07-01
 
 First stable source tree. Source-consumption ready via `find_package(Halcyon)`
