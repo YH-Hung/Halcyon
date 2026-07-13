@@ -5,6 +5,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -158,6 +159,14 @@ public:
     // [A-Za-z_][A-Za-z0-9_]{0,127} and must not begin with SYS
     // (ErrorCode::InvalidArgument otherwise).
     Result<Savepoint> savepoint(const std::string& name);
+
+    // Runs fn inside a savepoint scope on THIS transaction: an ok Result
+    // releases the savepoint, an error Result or exception rolls back to it
+    // (the error/exception propagates). Calling commit()/rollback() on the
+    // transaction inside fn is a programming error -> ErrorCode::InvalidState.
+    // fn must return Result<U>.
+    template <class Fn>
+    auto nested(Fn&& fn) -> std::invoke_result_t<Fn, Transaction&>;
 
 private:
     friend class Connection;
@@ -315,6 +324,35 @@ inline Result<Savepoint> Transaction::make_savepoint(std::string name) {
     auto r = execute("SAVEPOINT " + name + " ON ROLLBACK RETAIN CURSORS");
     if (!r.ok()) return r.error();
     return Savepoint(this, std::move(name));
+}
+
+template <class Fn>
+auto Transaction::nested(Fn&& fn) -> std::invoke_result_t<Fn, Transaction&> {
+    using R = std::invoke_result_t<Fn, Transaction&>;
+    auto sp = savepoint();
+    if (!sp.ok()) return R(sp.error());
+    R r = [&]() -> R {
+        try {
+            return std::forward<Fn>(fn)(*this);
+        } catch (...) {
+            sp.value().rollback();
+            throw;
+        }
+    }();
+    if (!active_) {
+        Error e;
+        e.code = ErrorCode::InvalidState;
+        e.message = "transaction ended inside nested scope "
+                    "(commit/rollback inside nested() is not allowed)";
+        return R(e);
+    }
+    if (r.ok()) {
+        auto rel = sp.value().release();
+        if (!rel.ok()) return R(rel.error());
+    } else {
+        sp.value().rollback();
+    }
+    return r;
 }
 
 inline Result<Transaction> Connection::begin() {

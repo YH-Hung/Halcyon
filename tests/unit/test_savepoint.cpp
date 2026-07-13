@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <stdexcept>
 #include <string>
 #include <utility>
 
@@ -130,4 +131,78 @@ TEST(Savepoint, InactiveTransactionIsRejected) {
     auto sp = tx.value().savepoint();
     ASSERT_FALSE(sp.ok());
     EXPECT_EQ(sp.error().code, ErrorCode::InvalidState);
+}
+
+TEST(NestedTransaction, SuccessReleases) {
+    Fixture f;
+    auto tx = f.conn->begin();
+    ASSERT_TRUE(tx.ok());
+    auto r = tx.value().nested(
+        [](halcyon::Transaction& inner) -> halcyon::Result<std::int64_t> {
+            return inner.execute("INSERT INTO t VALUES (1)");
+        });
+    ASSERT_TRUE(r.ok());
+    EXPECT_TRUE(prepared(f.drv, "SAVEPOINT halcyon_sp_1 ON ROLLBACK RETAIN CURSORS"));
+    EXPECT_TRUE(prepared(f.drv, "RELEASE SAVEPOINT halcyon_sp_1"));
+    EXPECT_FALSE(prepared(f.drv, "ROLLBACK TO SAVEPOINT halcyon_sp_1"));
+}
+
+TEST(NestedTransaction, ErrorResultRollsBackToSavepoint) {
+    Fixture f;
+    auto tx = f.conn->begin();
+    ASSERT_TRUE(tx.ok());
+    auto r = tx.value().nested(
+        [](halcyon::Transaction&) -> halcyon::Result<std::int64_t> {
+            halcyon::Error e;
+            e.code = halcyon::ErrorCode::Constraint;
+            e.message = "dup";
+            return e;
+        });
+    ASSERT_FALSE(r.ok());
+    EXPECT_EQ(r.error().code, halcyon::ErrorCode::Constraint);
+    EXPECT_TRUE(prepared(f.drv, "ROLLBACK TO SAVEPOINT halcyon_sp_1"));
+    EXPECT_TRUE(tx.value().active());  // outer transaction still usable
+}
+
+TEST(NestedTransaction, ExceptionRollsBackAndRethrows) {
+    Fixture f;
+    auto tx = f.conn->begin();
+    ASSERT_TRUE(tx.ok());
+    EXPECT_THROW(
+        tx.value().nested(
+            [](halcyon::Transaction&) -> halcyon::Result<std::int64_t> {
+                throw std::runtime_error("boom");
+            }),
+        std::runtime_error);
+    EXPECT_TRUE(prepared(f.drv, "ROLLBACK TO SAVEPOINT halcyon_sp_1"));
+}
+
+TEST(NestedTransaction, CommitInsideScopeIsInvalidState) {
+    Fixture f;
+    auto tx = f.conn->begin();
+    ASSERT_TRUE(tx.ok());
+    auto r = tx.value().nested(
+        [](halcyon::Transaction& inner) -> halcyon::Result<std::int64_t> {
+            auto c = inner.commit();  // misuse
+            (void)c;
+            return std::int64_t{0};
+        });
+    ASSERT_FALSE(r.ok());
+    EXPECT_EQ(r.error().code, halcyon::ErrorCode::InvalidState);
+}
+
+TEST(NestedTransaction, NestedInNestedUsesSecondSavepoint) {
+    Fixture f;
+    auto tx = f.conn->begin();
+    ASSERT_TRUE(tx.ok());
+    auto r = tx.value().nested(
+        [](halcyon::Transaction& t1) -> halcyon::Result<std::int64_t> {
+            return t1.nested(
+                [](halcyon::Transaction& t2) -> halcyon::Result<std::int64_t> {
+                    return t2.execute("INSERT INTO t VALUES (2)");
+                });
+        });
+    ASSERT_TRUE(r.ok());
+    EXPECT_TRUE(prepared(f.drv, "RELEASE SAVEPOINT halcyon_sp_2"));
+    EXPECT_TRUE(prepared(f.drv, "RELEASE SAVEPOINT halcyon_sp_1"));
 }
