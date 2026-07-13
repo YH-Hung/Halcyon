@@ -1,7 +1,9 @@
 #include <gtest/gtest.h>
 
 #include <cstring>
+#include <fstream>
 #include <memory>
+#include <sstream>
 #include <string>
 #include <utility>
 #include <vector>
@@ -159,4 +161,51 @@ TEST(Streaming, TransactionForwardsQueryStreaming) {
     ASSERT_TRUE(row.has_value());
     EXPECT_EQ(row->get<std::int64_t>(0).value(), 5);
     ASSERT_TRUE(tx.value().commit().ok());
+}
+
+TEST(LobReaderSinks, ToStringAndToVector) {
+    Fixture f;
+    f.drv.resultSets.push_back(
+        {{"a", "b"},
+         {{Value{std::string{"text cell"}}, Value{std::string{"bin cell"}}}}});
+    f.drv.lobChunkCap = 3;
+    auto rs = f.conn->queryStreaming("SELECT a, b FROM t");
+    auto row = rs.value().next();
+    auto s = row->lob(0).value().toString();
+    ASSERT_TRUE(s.ok());
+    EXPECT_EQ(s.value(), "text cell");
+    auto v = row->lob(1).value().toVector();
+    ASSERT_TRUE(v.ok());
+    EXPECT_EQ(v.value().size(), 8u);
+}
+
+TEST(LobReaderSinks, ToStreamAndToFile) {
+    Fixture f;
+    f.drv.resultSets.push_back(
+        {{"a", "b"},
+         {{Value{std::string{"stream me"}}, Value{std::string{"file me"}}}}});
+    auto rs = f.conn->queryStreaming("SELECT a, b FROM t");
+    auto row = rs.value().next();
+    std::ostringstream out;
+    ASSERT_TRUE(row->lob(0).value().toStream(out).ok());
+    EXPECT_EQ(out.str(), "stream me");
+    const std::string path = ::testing::TempDir() + "halcyon_lob_sink.bin";
+    ASSERT_TRUE(row->lob(1).value().toFile(path).ok());
+    std::ifstream in(path, std::ios::binary);
+    std::string back((std::istreambuf_iterator<char>(in)),
+                     std::istreambuf_iterator<char>());
+    EXPECT_EQ(back, "file me");
+}
+
+TEST(LobReaderSinks, NullLobYieldsEmpty) {
+    Fixture f;
+    f.drv.resultSets.push_back({{"a"}, {{Value{Null{}}}}});
+    auto rs = f.conn->queryStreaming("SELECT a FROM t");
+    auto row = rs.value().next();
+    auto lob = row->lob(0);
+    ASSERT_TRUE(lob.ok());
+    auto s = lob.value().toString();
+    ASSERT_TRUE(s.ok());
+    EXPECT_TRUE(s.value().empty());
+    EXPECT_TRUE(lob.value().isNull());
 }

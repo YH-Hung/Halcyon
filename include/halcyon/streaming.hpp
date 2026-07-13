@@ -167,6 +167,59 @@ inline Result<std::size_t> LobReader::read(std::byte* buf, std::size_t len) {
     return c.value().bytes;
 }
 
+namespace detail {
+inline constexpr std::size_t kLobSinkBufBytes = 64 * 1024;
+}  // namespace detail
+
+inline Result<std::vector<std::byte>> LobReader::toVector() {
+    std::vector<std::byte> out;
+    std::vector<std::byte> buf(detail::kLobSinkBufBytes);
+    for (;;) {
+        auto n = read(buf.data(), buf.size());
+        if (!n.ok()) return n.error();
+        if (n.value() == 0) break;
+        out.insert(out.end(), buf.begin(),
+                   buf.begin() + static_cast<std::ptrdiff_t>(n.value()));
+    }
+    return out;
+}
+
+inline Result<std::string> LobReader::toString() {
+    std::string out;
+    std::vector<std::byte> buf(detail::kLobSinkBufBytes);
+    for (;;) {
+        auto n = read(buf.data(), buf.size());
+        if (!n.ok()) return n.error();
+        if (n.value() == 0) break;
+        out.append(reinterpret_cast<const char*>(buf.data()), n.value());
+    }
+    return out;
+}
+
+inline Result<void> LobReader::toStream(std::ostream& out) {
+    std::vector<std::byte> buf(detail::kLobSinkBufBytes);
+    for (;;) {
+        auto n = read(buf.data(), buf.size());
+        if (!n.ok()) return n.error();
+        if (n.value() == 0) break;
+        out.write(reinterpret_cast<const char*>(buf.data()),
+                  static_cast<std::streamsize>(n.value()));
+        if (!out.good()) return detail::mapping_error("output stream write failed");
+    }
+    return Result<void>();
+}
+
+inline Result<void> LobReader::toFile(const std::string& path) {
+    std::ofstream f(path, std::ios::binary | std::ios::trunc);
+    if (!f.is_open())
+        return detail::mapping_error("cannot open '" + path + "' for writing");
+    auto r = toStream(f);
+    if (!r.ok()) return r;
+    f.flush();
+    if (!f.good()) return detail::mapping_error("flush to '" + path + "' failed");
+    return Result<void>();
+}
+
 // --- Connection::queryStreaming (declared in connection.hpp) ---
 
 inline Result<StreamingResultSet> Connection::queryStreamingImpl(
