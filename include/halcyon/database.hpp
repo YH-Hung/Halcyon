@@ -24,6 +24,7 @@
 #include "halcyon/pool.hpp"
 #include "halcyon/result.hpp"
 #include "halcyon/retry.hpp"
+#include "halcyon/streaming.hpp"
 #include "halcyon/transaction.hpp"
 #include "halcyon/types.hpp"
 
@@ -165,6 +166,47 @@ private:
     std::shared_ptr<ConnectionPool> pool_;
     PooledConnection lease_;
     ResultSet rs_;
+};
+
+/// \brief A StreamingResultSet plus the pooled lease it runs on, returned by
+/// Database::queryStreaming(). Move-only; rows stream while the lease is
+/// held. Single-attempt (streaming queries are never auto-retried).
+class StreamingQueryResult {
+public:
+    StreamingQueryResult(StreamingQueryResult&&) noexcept = default;
+    StreamingQueryResult& operator=(StreamingQueryResult&&) noexcept = default;
+    StreamingQueryResult(const StreamingQueryResult&) = delete;
+    StreamingQueryResult& operator=(const StreamingQueryResult&) = delete;
+    ~StreamingQueryResult() {
+        // A mid-stream connection-class failure means the leased connection is
+        // dead — discard it instead of returning it to the pool.
+        if (lease_.get()) {
+            const auto& e = rs_.error();
+            if (e && e->code == ErrorCode::Connection) lease_.markBroken();
+        }
+    }
+
+    std::optional<StreamingRow> next() { return rs_.next(); }
+    std::size_t column_count() const noexcept { return rs_.column_count(); }
+    bool ok() const noexcept { return rs_.ok(); }
+    const std::optional<Error>& error() const noexcept { return rs_.error(); }
+
+private:
+    friend class Database;
+    StreamingQueryResult(std::shared_ptr<detail::cli::ICliDriver> driver,
+                         std::shared_ptr<ConnectionPool> pool,
+                         PooledConnection lease, StreamingResultSet rs)
+        : owned_driver_(std::move(driver)),
+          pool_(std::move(pool)),
+          lease_(std::move(lease)),
+          rs_(std::move(rs)) {}
+
+    // Same lifetime contract and destruction order as QueryResult: rs_ (closes
+    // the cursor) -> lease_ (returns the connection) -> pool_ -> owned_driver_.
+    std::shared_ptr<detail::cli::ICliDriver> owned_driver_;
+    std::shared_ptr<ConnectionPool> pool_;
+    PooledConnection lease_;
+    StreamingResultSet rs_;
 };
 
 /// \brief A Transaction plus the pooled lease it runs on, returned by `Database::begin()`.
@@ -357,6 +399,28 @@ public:
                           "halcyon.query", sql, [&] {
                               return query_impl(default_policy(sql), [&](Connection& c) {
                                   return c.query(sql, named);
+                              });
+                          });
+    }
+
+    // --- streaming query (row-at-a-time cursor, chunked LOB reads) ---
+    template <class... Args,
+              std::enable_if_t<(is_bindable<Args>::value && ...), int> = 0>
+    Result<StreamingQueryResult> queryStreaming(const std::string& sql,
+                                                const Args&... args) {
+        return instrument(metrics_, tracer_, has_metrics_, has_tracer_,
+                          "halcyon.query", sql, [&] {
+                              return stream_impl([&](Connection& c) {
+                                  return c.queryStreaming(sql, args...);
+                              });
+                          });
+    }
+    Result<StreamingQueryResult> queryStreaming(const std::string& sql,
+                                                const params& named) {
+        return instrument(metrics_, tracer_, has_metrics_, has_tracer_,
+                          "halcyon.query", sql, [&] {
+                              return stream_impl([&](Connection& c) {
+                                  return c.queryStreaming(sql, named);
                               });
                           });
     }
@@ -676,6 +740,23 @@ private:
             st.value().rollback();
         }
         return r;
+    }
+
+    // Single-attempt streaming query: acquires a lease and hands it to the
+    // returned StreamingQueryResult. No auto-retry (documented).
+    template <class Op>
+    Result<StreamingQueryResult> stream_impl(Op&& op) {
+        auto lease = pool_->acquire();
+        if (!lease.ok()) return lease.error();
+        auto rs = op(*lease.value());
+        if (!rs.ok()) {
+            if (rs.error().code == ErrorCode::Connection)
+                lease.value().markBroken();
+            return rs.error();
+        }
+        return StreamingQueryResult(owned_driver_, pool_,
+                                    std::move(lease.value()),
+                                    std::move(rs.value()));
     }
 
     static void emit_retry(ConnectionPool& pool, obs::MetricsSink* m, bool hasM,

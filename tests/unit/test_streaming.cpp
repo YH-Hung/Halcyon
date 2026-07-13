@@ -209,3 +209,50 @@ TEST(LobReaderSinks, NullLobYieldsEmpty) {
     EXPECT_TRUE(s.value().empty());
     EXPECT_TRUE(lob.value().isNull());
 }
+
+TEST(DatabaseStreaming, RowsStreamAndLeaseReturnsToPool) {
+    MockCliDriver drv;
+    halcyon::PoolConfig cfg;
+    cfg.min = 1;
+    cfg.max = 1;
+    cfg.startMaintenanceThread = false;
+    auto db = halcyon::Database::open(drv, "dsn", cfg);
+    ASSERT_TRUE(db.ok());
+    drv.resultSets.push_back(
+        {{"id", "doc"},
+         {{Value{std::int64_t{1}}, Value{std::string{"payload"}}}}});
+    {
+        auto rs = db.value().queryStreaming("SELECT id, doc FROM docs");
+        ASSERT_TRUE(rs.ok()) << rs.error().message;
+        auto row = rs.value().next();
+        ASSERT_TRUE(row.has_value());
+        EXPECT_EQ(row->get<std::int64_t>(0).value(), 1);
+        auto lob = row->lob(1);
+        ASSERT_TRUE(lob.ok());
+        EXPECT_EQ(lob.value().toString().value(), "payload");
+        EXPECT_EQ(db.value().pool().idle_count(), 0u);  // lease held
+    }
+    EXPECT_EQ(db.value().pool().idle_count(), 1u);  // lease returned
+}
+
+TEST(DatabaseStreaming, ConnectionErrorDiscardsLease) {
+    MockCliDriver drv;
+    halcyon::PoolConfig cfg;
+    cfg.min = 1;
+    cfg.max = 1;
+    cfg.startMaintenanceThread = false;
+    auto db = halcyon::Database::open(drv, "dsn", cfg);
+    ASSERT_TRUE(db.ok());
+    drv.resultSets.push_back({{"doc"}, {{Value{std::string{"x"}}}}});
+    halcyon::Error dead;
+    dead.code = ErrorCode::Connection;
+    drv.fetchNextErrors.push_back(dead);
+    const int disconnectsBefore = drv.disconnectCalls;
+    {
+        auto rs = db.value().queryStreaming("SELECT doc FROM docs");
+        ASSERT_TRUE(rs.ok());
+        EXPECT_FALSE(rs.value().next().has_value());
+        EXPECT_FALSE(rs.value().ok());
+    }
+    EXPECT_GT(drv.disconnectCalls, disconnectsBefore);  // broken lease discarded
+}
