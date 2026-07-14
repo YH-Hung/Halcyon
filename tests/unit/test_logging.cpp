@@ -85,3 +85,21 @@ TEST(StderrLogger, WritesLogfmtLine) {
     EXPECT_NE(line.find("ts="), std::string::npos);
     std::fclose(f);
 }
+
+TEST(StderrLogger, EscapesUnsafeEventAndKeys) {
+    std::FILE* f = std::tmpfile();
+    ASSERT_NE(f, nullptr);
+    {
+        halcyon::obs::StderrLogger lg(f);
+        // A public caller could pass an event/key with delimiters; both must be
+        // quoted so the record stays parseable and injection-free.
+        lg.log(LogLevel::Info, "weird event", {{"a b", std::int64_t{1}}});
+    }
+    std::rewind(f);
+    char buf[256] = {};
+    std::fread(buf, 1, sizeof(buf) - 1, f);
+    std::string line(buf);
+    EXPECT_NE(line.find("event=\"weird event\""), std::string::npos);
+    EXPECT_NE(line.find("\"a b\"=1"), std::string::npos);
+    std::fclose(f);
+}

@@ -91,10 +91,10 @@ void StderrLogger::log(LogLevel level, std::string_view event,
         line += " level=";
         line += to_string(level);
         line += " event=";
-        line.append(event.data(), event.size());
+        append_logfmt_string(line, event);
         for (const auto& f : fields) {
             line += ' ';
-            line.append(f.key.data(), f.key.size());
+            append_logfmt_string(line, f.key);  // public callers may supply keys
             line += '=';
             append_value(line, f.value);
         }
