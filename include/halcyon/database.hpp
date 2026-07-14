@@ -121,7 +121,23 @@ Batch batchOf(const std::vector<std::tuple<Cols...>>& rows) {
 class QueryResult {
 public:
     QueryResult(QueryResult&&) noexcept = default;
-    QueryResult& operator=(QueryResult&&) noexcept = default;
+    // Custom (not defaulted) so the current cursor closes BEFORE its connection
+    // returns to the pool: a defaulted memberwise assignment would move lease_
+    // before rs_, returning the connection while the old cursor is still open —
+    // another thread could then acquire and use it concurrently.
+    QueryResult& operator=(QueryResult&& o) noexcept {
+        if (this != &o) {
+            if (lease_.get()) {  // apply the destructor's broken-lease policy first
+                const auto& e = rs_.error();
+                if (e && e->code == ErrorCode::Connection) lease_.markBroken();
+            }
+            rs_ = std::move(o.rs_);        // closes the old cursor
+            lease_ = std::move(o.lease_);  // then returns/discards the old connection
+            pool_ = std::move(o.pool_);
+            owned_driver_ = std::move(o.owned_driver_);
+        }
+        return *this;
+    }
     QueryResult(const QueryResult&) = delete;
     QueryResult& operator=(const QueryResult&) = delete;
     ~QueryResult() {
@@ -174,7 +190,21 @@ private:
 class StreamingQueryResult {
 public:
     StreamingQueryResult(StreamingQueryResult&&) noexcept = default;
-    StreamingQueryResult& operator=(StreamingQueryResult&&) noexcept = default;
+    // Custom (not defaulted): close the cursor (rs_) before returning the
+    // connection (lease_) — see QueryResult::operator= for the rationale.
+    StreamingQueryResult& operator=(StreamingQueryResult&& o) noexcept {
+        if (this != &o) {
+            if (lease_.get()) {
+                const auto& e = rs_.error();
+                if (e && e->code == ErrorCode::Connection) lease_.markBroken();
+            }
+            rs_ = std::move(o.rs_);        // closes the old cursor
+            lease_ = std::move(o.lease_);  // then returns/discards the old connection
+            pool_ = std::move(o.pool_);
+            owned_driver_ = std::move(o.owned_driver_);
+        }
+        return *this;
+    }
     StreamingQueryResult(const StreamingQueryResult&) = delete;
     StreamingQueryResult& operator=(const StreamingQueryResult&) = delete;
     ~StreamingQueryResult() {
@@ -217,7 +247,22 @@ private:
 class ScopedTransaction {
 public:
     ScopedTransaction(ScopedTransaction&&) noexcept = default;
-    ScopedTransaction& operator=(ScopedTransaction&&) noexcept = default;
+    // Custom (not defaulted): finish the inner transaction (txn_) before the
+    // connection (lease_) returns to the pool — see QueryResult::operator= for
+    // the rationale.
+    ScopedTransaction& operator=(ScopedTransaction&& o) noexcept {
+        if (this != &o) {
+            if (lease_.get()) {  // apply the destructor's teardown/policy first
+                if (txn_.active()) txn_.rollback();
+                if (txn_.poisoned()) lease_.markBroken();
+            }
+            txn_ = std::move(o.txn_);      // ends & adopts the inner transaction
+            lease_ = std::move(o.lease_);  // then returns/discards the old connection
+            pool_ = std::move(o.pool_);
+            owned_driver_ = std::move(o.owned_driver_);
+        }
+        return *this;
+    }
     ScopedTransaction(const ScopedTransaction&) = delete;
     ScopedTransaction& operator=(const ScopedTransaction&) = delete;
     ~ScopedTransaction() {

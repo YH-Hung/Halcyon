@@ -235,6 +235,32 @@ TEST(DatabaseStreaming, RowsStreamAndLeaseReturnsToPool) {
     EXPECT_EQ(db.value().pool().idle_count(), 1u);  // lease returned
 }
 
+TEST(DatabaseStreaming, MoveAssignClosesOldCursorBeforeReturningLease) {
+    MockCliDriver drv;
+    halcyon::PoolConfig cfg;
+    cfg.min = 1;
+    cfg.max = 2;
+    cfg.startMaintenanceThread = false;
+    auto db = halcyon::Database::open(drv, "dsn", cfg);
+    ASSERT_TRUE(db.ok());
+    drv.resultSets.push_back({{"doc"}, {{Value{std::string{"first"}}}}});
+    drv.resultSets.push_back({{"doc"}, {{Value{std::string{"second"}}}}});
+
+    auto a = db.value().queryStreaming("SELECT doc FROM t").value();
+    ASSERT_TRUE(a.next().has_value());  // cursor A live on conn 1
+    auto b = db.value().queryStreaming("SELECT doc FROM t").value();
+    ASSERT_TRUE(b.next().has_value());  // cursor B live on conn 2
+
+    const int closesBefore = drv.closeCursorCalls;
+    a = std::move(b);  // custom move-assign: close cursor A before its lease returns
+    EXPECT_GT(drv.closeCursorCalls, closesBefore);  // old cursor A was closed
+
+    // The moved-into result now owns cursor B (its single row was already
+    // consumed), and remains usable with no double-return.
+    EXPECT_FALSE(a.next().has_value());
+    EXPECT_TRUE(a.ok());
+}
+
 TEST(DatabaseStreaming, ConnectionErrorDiscardsLease) {
     MockCliDriver drv;
     halcyon::PoolConfig cfg;
