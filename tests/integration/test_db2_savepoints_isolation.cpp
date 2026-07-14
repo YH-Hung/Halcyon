@@ -82,6 +82,32 @@ TEST_F(Db2TxnV11, NestedSavepointsAndOuterRollback) {
     ASSERT_TRUE(tx.value().commit().ok());
 }
 
+// Spike (raw SQL, bypassing the client-side guard): demonstrates the actual Db2
+// name-reuse semantics that motivate the policy — same-name reuse REPLACES the
+// server-side savepoint, and unquoted identifiers fold case (spec §8).
+TEST_F(Db2TxnV11, RawSavepointReuseReplacesAndFoldsCase) {
+    auto tx = conn_->begin();
+    ASSERT_TRUE(tx.ok());
+    // Replacement: reissuing SAVEPOINT sp moves its boundary forward.
+    ASSERT_TRUE(tx.value().execute("SAVEPOINT sp ON ROLLBACK RETAIN CURSORS").ok());
+    ASSERT_TRUE(tx.value().execute("INSERT INTO halcyon_v11_txn VALUES (1)").ok());
+    ASSERT_TRUE(  // Db2 accepts the reuse and replaces the earlier savepoint
+        tx.value().execute("SAVEPOINT sp ON ROLLBACK RETAIN CURSORS").ok());
+    ASSERT_TRUE(tx.value().execute("INSERT INTO halcyon_v11_txn VALUES (2)").ok());
+    ASSERT_TRUE(tx.value().execute("ROLLBACK TO SAVEPOINT sp").ok());
+    EXPECT_EQ(count(), 1);  // rolled back to the SECOND savepoint, not the first
+    ASSERT_TRUE(tx.value().execute("RELEASE SAVEPOINT sp").ok());
+
+    // Case folding: an unquoted name folds to uppercase, so RELEASE with a
+    // different casing addresses the very same savepoint.
+    ASSERT_TRUE(tx.value()
+                    .execute("SAVEPOINT case_alias ON ROLLBACK RETAIN CURSORS")
+                    .ok());
+    EXPECT_TRUE(tx.value().execute("RELEASE SAVEPOINT CASE_ALIAS").ok());
+
+    ASSERT_TRUE(tx.value().rollback().ok());
+}
+
 // Spike: same-name savepoint reuse. Db2 replaces the server-side savepoint on
 // same-name reuse (silently retargeting a still-active guard), so Halcyon
 // rejects reusing the name of a live savepoint client-side (spec §5 C.2 / §8).

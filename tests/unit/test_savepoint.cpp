@@ -258,3 +258,34 @@ TEST(NestedTransaction, CommitThenThrowInsideScopeDisarmsSavepoint) {
     EXPECT_FALSE(prepared(f.drv, "ROLLBACK TO SAVEPOINT halcyon_sp_1"));
     EXPECT_FALSE(prepared(f.drv, "RELEASE SAVEPOINT halcyon_sp_1"));
 }
+
+TEST(Savepoint, DuplicateNameIsCaseInsensitive) {
+    Fixture f;
+    auto tx = f.conn->begin();
+    ASSERT_TRUE(tx.ok());
+    auto sp1 = tx.value().savepoint("case_alias");
+    ASSERT_TRUE(sp1.ok());
+    // Db2 folds unquoted identifiers, so a different casing is the SAME
+    // server-side savepoint and must be rejected.
+    auto sp2 = tx.value().savepoint("CASE_ALIAS");
+    ASSERT_FALSE(sp2.ok());
+    EXPECT_EQ(sp2.error().code, halcyon::ErrorCode::InvalidArgument);
+    // The name frees case-insensitively once its guard is released.
+    ASSERT_TRUE(sp1.value().release().ok());
+    auto sp3 = tx.value().savepoint("Case_Alias");
+    EXPECT_TRUE(sp3.ok());
+    ASSERT_TRUE(sp3.value().release().ok());
+}
+
+TEST(Savepoint, ExplicitNameCollidesWithAutoNameCaseInsensitively) {
+    Fixture f;
+    auto tx = f.conn->begin();
+    ASSERT_TRUE(tx.ok());
+    auto autoSp = tx.value().savepoint();  // halcyon_sp_1
+    ASSERT_TRUE(autoSp.ok());
+    EXPECT_EQ(autoSp.value().name(), "halcyon_sp_1");  // original spelling kept
+    auto clash = tx.value().savepoint("HALCYON_SP_1");  // same, case-folded
+    ASSERT_FALSE(clash.ok());
+    EXPECT_EQ(clash.error().code, halcyon::ErrorCode::InvalidArgument);
+    ASSERT_TRUE(autoSp.value().release().ok());
+}

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <cctype>
 #include <cstdint>
 #include <optional>
@@ -41,6 +42,20 @@ inline bool valid_savepoint_name(std::string_view name) {
     }
     return true;
 }
+
+// Orders savepoint names case-insensitively (ASCII). Db2 folds an unquoted
+// identifier to uppercase, so `case_alias` and `CASE_ALIAS` denote the SAME
+// server-side savepoint; the live-name registry must treat them as equal or a
+// case variant would bypass the reuse guard and retarget a stale C++ guard.
+struct SavepointNameLess {
+    bool operator()(const std::string& a, const std::string& b) const noexcept {
+        return std::lexicographical_compare(
+            a.begin(), a.end(), b.begin(), b.end(),
+            [](unsigned char x, unsigned char y) {
+                return std::toupper(x) < std::toupper(y);
+            });
+    }
+};
 
 }  // namespace detail
 
@@ -220,10 +235,11 @@ private:
     bool poisoned_ = false;
     std::optional<Isolation> restoreIsolation_;
     int spCounter_ = 0;  // auto savepoint names; moved with the transaction
-    // Names of savepoints with a live guard. Guards two same-name savepoints
-    // never being active at once: Db2 replaces a savepoint on same-name reuse,
-    // which would silently move a still-active guard's boundary.
-    std::set<std::string> activeSavepoints_;
+    // Names of savepoints with a live guard, compared case-insensitively (Db2
+    // folds unquoted identifiers). Guards two same-name savepoints never being
+    // active at once: Db2 replaces a savepoint on same-name reuse, which would
+    // silently move a still-active guard's boundary.
+    std::set<std::string, detail::SavepointNameLess> activeSavepoints_;
 };
 
 /// \brief One-shot RAII guard over a SQL savepoint inside a Transaction.
