@@ -3,6 +3,7 @@
 #include <cctype>
 #include <cstdint>
 #include <optional>
+#include <set>
 #include <string>
 #include <string_view>
 #include <type_traits>
@@ -58,12 +59,14 @@ public:
           active_(o.active_),
           poisoned_(o.poisoned_),
           restoreIsolation_(std::move(o.restoreIsolation_)),
-          spCounter_(o.spCounter_) {
+          spCounter_(o.spCounter_),
+          activeSavepoints_(std::move(o.activeSavepoints_)) {
         o.conn_ = nullptr;
         o.active_ = false;
         o.poisoned_ = false;
         o.restoreIsolation_.reset();
         o.spCounter_ = 0;
+        o.activeSavepoints_.clear();
     }
     Transaction& operator=(Transaction&& o) noexcept {
         if (this != &o) {
@@ -73,11 +76,13 @@ public:
             poisoned_ = o.poisoned_;
             restoreIsolation_ = std::move(o.restoreIsolation_);
             spCounter_ = o.spCounter_;
+            activeSavepoints_ = std::move(o.activeSavepoints_);
             o.conn_ = nullptr;
             o.active_ = false;
             o.poisoned_ = false;
             o.restoreIsolation_.reset();
             o.spCounter_ = 0;
+            o.activeSavepoints_.clear();
         }
         return *this;
     }
@@ -215,6 +220,10 @@ private:
     bool poisoned_ = false;
     std::optional<Isolation> restoreIsolation_;
     int spCounter_ = 0;  // auto savepoint names; moved with the transaction
+    // Names of savepoints with a live guard. Guards two same-name savepoints
+    // never being active at once: Db2 replaces a savepoint on same-name reuse,
+    // which would silently move a still-active guard's boundary.
+    std::set<std::string> activeSavepoints_;
 };
 
 /// \brief One-shot RAII guard over a SQL savepoint inside a Transaction.
@@ -260,6 +269,7 @@ public:
     Result<void> rollback() {
         if (tx_ == nullptr || !active_) return Result<void>();
         active_ = false;
+        free_name();
         auto r = tx_->execute("ROLLBACK TO SAVEPOINT " + name_);
         if (!r.ok()) {
             poison();
@@ -272,6 +282,7 @@ public:
     Result<void> release() {
         if (tx_ == nullptr || !active_) return Result<void>();
         active_ = false;
+        free_name();
         auto r = tx_->execute("RELEASE SAVEPOINT " + name_);
         if (!r.ok()) {
             poison();
@@ -285,6 +296,18 @@ private:
     Savepoint(Transaction* tx, std::string name)
         : tx_(tx), name_(std::move(name)), active_(true) {}
 
+    // Releases this guard's hold on its name (so the name may be reused) without
+    // issuing any SQL. Used when the transaction has already ended.
+    void free_name() noexcept {
+        if (tx_ != nullptr) tx_->activeSavepoints_.erase(name_);
+    }
+
+    // Neutralizes the guard: frees its name and makes the destructor a no-op.
+    void disarm() noexcept {
+        free_name();
+        active_ = false;
+    }
+
     void poison() noexcept {
         poisoned_ = true;
         if (auto* lg = tx_->conn_->logger())
@@ -296,6 +319,7 @@ private:
     void finish_rollback() noexcept {
         if (tx_ != nullptr && active_) {
             active_ = false;
+            free_name();
             auto r = tx_->execute("ROLLBACK TO SAVEPOINT " + name_);
             auto rel = tx_->execute("RELEASE SAVEPOINT " + name_);
             if (!r.ok() || !rel.ok()) poison();
@@ -331,8 +355,19 @@ inline Result<Savepoint> Transaction::make_savepoint(std::string name) {
         e.message = "savepoint requires an active transaction";
         return e;
     }
+    // Reusing the name of a still-active savepoint is rejected: Db2 would
+    // replace the existing savepoint, silently retargeting the earlier guard.
+    // A name is free again once its guard is rolled back, released, or dropped.
+    if (activeSavepoints_.count(name) != 0) {
+        Error e;
+        e.code = ErrorCode::InvalidArgument;
+        e.message = "savepoint name '" + name +
+                    "' is already active in this transaction";
+        return e;
+    }
     auto r = execute("SAVEPOINT " + name + " ON ROLLBACK RETAIN CURSORS");
     if (!r.ok()) return r.error();
+    activeSavepoints_.insert(name);
     return Savepoint(this, std::move(name));
 }
 
@@ -345,7 +380,13 @@ auto Transaction::nested(Fn&& fn) -> std::invoke_result_t<Fn, Transaction&> {
         try {
             return std::forward<Fn>(fn)(*this);
         } catch (...) {
-            sp.value().rollback();
+            // If fn ended the transaction before throwing, the savepoint no
+            // longer exists — disarm rather than issue ROLLBACK TO against an
+            // ended transaction (which would fail and poison the connection).
+            if (active_)
+                sp.value().rollback();
+            else
+                sp.value().disarm();
             throw;
         }
     }();
@@ -354,7 +395,7 @@ auto Transaction::nested(Fn&& fn) -> std::invoke_result_t<Fn, Transaction&> {
         // savepoint no longer exists, so disarm the guard. Otherwise its
         // destructor would run ROLLBACK TO / RELEASE on an ended transaction,
         // fail, and needlessly poison and discard the pooled connection.
-        sp.value().active_ = false;
+        sp.value().disarm();
         Error e;
         e.code = ErrorCode::InvalidState;
         e.message = "transaction ended inside nested scope "

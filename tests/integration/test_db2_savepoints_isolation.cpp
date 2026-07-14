@@ -82,6 +82,25 @@ TEST_F(Db2TxnV11, NestedSavepointsAndOuterRollback) {
     ASSERT_TRUE(tx.value().commit().ok());
 }
 
+// Spike: same-name savepoint reuse. Db2 replaces the server-side savepoint on
+// same-name reuse (silently retargeting a still-active guard), so Halcyon
+// rejects reusing the name of a live savepoint client-side (spec §5 C.2 / §8).
+TEST_F(Db2TxnV11, DuplicateActiveSavepointNameIsRejected) {
+    auto tx = conn_->begin();
+    ASSERT_TRUE(tx.ok());
+    auto sp1 = tx.value().savepoint("reused");
+    ASSERT_TRUE(sp1.ok()) << sp1.error().message;
+    ASSERT_TRUE(tx.value().execute("INSERT INTO halcyon_v11_txn VALUES (1)").ok());
+    // Reuse while sp1 is live is rejected before any SQL reaches Db2.
+    auto sp2 = tx.value().savepoint("reused");
+    ASSERT_FALSE(sp2.ok());
+    EXPECT_EQ(sp2.error().code, halcyon::ErrorCode::InvalidArgument);
+    // sp1 still targets its original boundary and rolls back the insert.
+    ASSERT_TRUE(sp1.value().rollback().ok());
+    EXPECT_EQ(count(), 0);
+    ASSERT_TRUE(tx.value().commit().ok());
+}
+
 // Spike: ROLLBACK TO an outer savepoint destroys savepoints established after
 // it. Unlike NestedSavepointsAndOuterRollback, the inner savepoint is left LIVE
 // (not released) so the "destroys later savepoints" rule is actually exercised.

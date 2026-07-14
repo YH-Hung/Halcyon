@@ -212,3 +212,49 @@ TEST(NestedTransaction, NestedInNestedUsesSecondSavepoint) {
     EXPECT_TRUE(prepared(f.drv, "RELEASE SAVEPOINT halcyon_sp_2"));
     EXPECT_TRUE(prepared(f.drv, "RELEASE SAVEPOINT halcyon_sp_1"));
 }
+
+TEST(Savepoint, DuplicateActiveNameIsRejected) {
+    Fixture f;
+    auto tx = f.conn->begin();
+    ASSERT_TRUE(tx.ok());
+    auto sp1 = tx.value().savepoint("dup");
+    ASSERT_TRUE(sp1.ok());
+    // A second guard with the same still-active name is rejected: Db2 would
+    // replace the server-side savepoint and silently retarget sp1.
+    auto sp2 = tx.value().savepoint("dup");
+    ASSERT_FALSE(sp2.ok());
+    EXPECT_EQ(sp2.error().code, halcyon::ErrorCode::InvalidArgument);
+    // Releasing sp1 frees the name for reuse.
+    ASSERT_TRUE(sp1.value().release().ok());
+    auto sp3 = tx.value().savepoint("dup");
+    EXPECT_TRUE(sp3.ok());
+    ASSERT_TRUE(sp3.value().release().ok());
+}
+
+TEST(Savepoint, NameFreedAfterGuardDestroyed) {
+    Fixture f;
+    auto tx = f.conn->begin();
+    ASSERT_TRUE(tx.ok());
+    { auto sp = tx.value().savepoint("scoped"); ASSERT_TRUE(sp.ok()); }  // dtor frees
+    auto sp2 = tx.value().savepoint("scoped");
+    EXPECT_TRUE(sp2.ok());
+    ASSERT_TRUE(sp2.value().release().ok());
+}
+
+TEST(NestedTransaction, CommitThenThrowInsideScopeDisarmsSavepoint) {
+    Fixture f;
+    auto tx = f.conn->begin();
+    ASSERT_TRUE(tx.ok());
+    EXPECT_THROW(
+        tx.value().nested(
+            [](halcyon::Transaction& inner) -> halcyon::Result<std::int64_t> {
+                auto c = inner.commit();  // ends the transaction
+                (void)c;
+                throw std::runtime_error("after commit");
+            }),
+        std::runtime_error);
+    // The savepoint guard must be disarmed on the throw-after-end path too: no
+    // ROLLBACK TO / RELEASE against the ended transaction.
+    EXPECT_FALSE(prepared(f.drv, "ROLLBACK TO SAVEPOINT halcyon_sp_1"));
+    EXPECT_FALSE(prepared(f.drv, "RELEASE SAVEPOINT halcyon_sp_1"));
+}
