@@ -360,11 +360,25 @@ public:
         for (const auto& src : sources) {
             std::vector<std::byte> all;
             for (;;) {
-                const std::size_t n = src.pull(stage.data(), stage.size());
+                std::size_t n = 0;
+                try {
+                    n = src.pull(stage.data(), stage.size());
+                } catch (...) {  // faithful to the driver: never let it escape
+                    Error e;
+                    e.code = ErrorCode::Mapping;
+                    e.message = "LOB source pull threw an exception";
+                    return Result<std::int64_t>(e);
+                }
                 if (n == detail::cli::ParamStreamSource::npos) {
                     Error e;
                     e.code = ErrorCode::Mapping;
                     e.message = "LOB source pull failed";
+                    return Result<std::int64_t>(e);
+                }
+                if (n > stage.size()) {  // would over-read the stage buffer
+                    Error e;
+                    e.code = ErrorCode::Mapping;
+                    e.message = "LOB source returned an oversized chunk";
                     return Result<std::int64_t>(e);
                 }
                 if (n == 0) break;

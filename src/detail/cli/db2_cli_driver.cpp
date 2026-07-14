@@ -619,11 +619,28 @@ public:
             }
             bool anyPut = false;
             for (;;) {
-                const std::size_t n = s->pull(stage.data(), stage.size());
+                std::size_t n = 0;
+                try {
+                    n = s->pull(stage.data(), stage.size());
+                } catch (...) {
+                    // A user callback must not throw across the seam: an escaping
+                    // exception would leave the statement in SQL_NEED_DATA state
+                    // and poison the cached handle. Cancel and map to an error.
+                    SQLCancel(st.handle);
+                    return Result<std::int64_t>(
+                        mapping_err("LOB source pull threw an exception"));
+                }
                 if (n == ParamStreamSource::npos) {
                     SQLCancel(st.handle);
                     return Result<std::int64_t>(
                         mapping_err("LOB source pull failed"));
+                }
+                if (n > stage.size()) {
+                    // A buggy source claiming more than the buffer holds would
+                    // make SQLPutData over-read the stage buffer.
+                    SQLCancel(st.handle);
+                    return Result<std::int64_t>(
+                        mapping_err("LOB source returned an oversized chunk"));
                 }
                 if (n == 0) break;
                 anyPut = true;

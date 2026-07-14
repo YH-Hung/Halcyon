@@ -3,6 +3,7 @@
 #include <cstring>
 #include <memory>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <utility>
 
@@ -85,4 +86,30 @@ TEST(LobWrite, DatabaseExecuteNeverRetriesStreams) {
                                 halcyon::lobStream(doc));
     ASSERT_FALSE(r.ok());
     EXPECT_EQ(drv.executeStreamingCalls, 1);  // exactly one attempt
+}
+
+TEST(LobWrite, ThrowingCallbackIsMappingError) {
+    MockCliDriver drv;
+    auto cr = Connection::open(drv, {"dsn"}, /*statementCacheSize=*/8);
+    Connection conn = std::move(cr.value());
+    auto r = conn.execute(
+        "INSERT INTO docs(content) VALUES (?)",
+        halcyon::lobCallback([](std::byte*, std::size_t) -> std::size_t {
+            throw std::runtime_error("boom");
+        }));
+    ASSERT_FALSE(r.ok());
+    EXPECT_EQ(r.error().code, ErrorCode::Mapping);
+}
+
+TEST(LobWrite, OversizedChunkIsMappingError) {
+    MockCliDriver drv;
+    auto cr = Connection::open(drv, {"dsn"}, /*statementCacheSize=*/8);
+    Connection conn = std::move(cr.value());
+    auto r = conn.execute(
+        "INSERT INTO docs(content) VALUES (?)",
+        halcyon::lobCallback([](std::byte*, std::size_t cap) -> std::size_t {
+            return cap + 1;  // claims more than the buffer holds
+        }));
+    ASSERT_FALSE(r.ok());
+    EXPECT_EQ(r.error().code, ErrorCode::Mapping);
 }
