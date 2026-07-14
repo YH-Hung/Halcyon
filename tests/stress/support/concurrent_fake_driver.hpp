@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <thread>
 #include <unordered_map>
@@ -13,6 +14,7 @@
 #include <vector>
 
 #include "halcyon/detail/cli/driver.hpp"
+#include "halcyon/isolation.hpp"
 
 namespace halcyon::stress {
 
@@ -62,6 +64,7 @@ public:
         const auto h = static_cast<ConnectionHandle>(next_conn_.fetch_add(1) + 1);
         std::lock_guard<std::mutex> lk(mu_);
         live_.insert(h);
+        connStates_[h] = ConnState{};  // Db2 defaults: autocommit on, isolation unset
         return Result<ConnectionHandle>(h);
     }
 
@@ -181,14 +184,34 @@ public:
     }
 
     // --- Transaction control ---
-    Result<void> setAutoCommit(ConnectionHandle, bool enabled) override {
+    Result<void> setAutoCommit(ConnectionHandle conn, bool enabled) override {
         if (enabled) ++autoCommitOn;
         else ++autoCommitOff;
+        std::lock_guard<std::mutex> lk(mu_);
+        connStates_[conn].autocommit = enabled;
         return Result<void>();
     }
-    Result<void> setIsolation(ConnectionHandle, Isolation) override {
+    Result<void> setIsolation(ConnectionHandle conn, Isolation level) override {
         setIsolationCalls.fetch_add(1, std::memory_order_relaxed);
+        std::lock_guard<std::mutex> lk(mu_);
+        connStates_[conn].isolation = level;
         return Result<void>();
+    }
+
+    // Per-connection session state so a test can assert every surviving
+    // connection ended in a restored state, not just that global call counts
+    // balance (which cannot detect a wrong value or offsetting per-connection
+    // errors).
+    struct ConnState {
+        bool autocommit = true;  // Db2 default: autocommit on
+        std::optional<Isolation> isolation;  // unset = server default (CS)
+    };
+    std::vector<ConnState> connection_states() {
+        std::lock_guard<std::mutex> lk(mu_);
+        std::vector<ConnState> out;
+        out.reserve(connStates_.size());
+        for (const auto& kv : connStates_) out.push_back(kv.second);
+        return out;
     }
 
     // --- Streaming data path (v1.1): not exercised by the stress suite ---
@@ -308,6 +331,7 @@ private:
     std::unordered_set<ConnectionHandle> live_;
     std::unordered_set<ConnectionHandle> dead_;
     std::unordered_map<StatementHandle, StmtState> stmts_;
+    std::unordered_map<ConnectionHandle, ConnState> connStates_;
     std::atomic<std::uint64_t> next_conn_{0};
     std::atomic<std::uint64_t> next_stmt_{0};
 };

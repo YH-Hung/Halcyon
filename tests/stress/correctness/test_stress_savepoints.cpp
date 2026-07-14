@@ -80,4 +80,15 @@ TEST(StressSavepoints, ConcurrentTransactionsWithSavepointsAndIsolation) {
     EXPECT_EQ(fake->autoCommitOn.load(), txns);
     EXPECT_EQ(fake->setIsolationCalls.load(), 2 * txns);
     EXPECT_EQ(fake->commitCalls.load(), txns);
+
+    // Per-connection final state: global balance alone cannot detect a wrong
+    // restored value or offsetting errors between connections. Every surviving
+    // connection must end with autocommit restored ON and its isolation back at
+    // the (server-default) restore target — never stuck mid-override.
+    for (const auto& st : fake->connection_states()) {
+        EXPECT_TRUE(st.autocommit);
+        EXPECT_TRUE(!st.isolation.has_value() ||
+                    *st.isolation == halcyon::Isolation::CursorStability)
+            << "connection left mid-override at a non-default isolation";
+    }
 }
