@@ -67,4 +67,17 @@ TEST(StressSavepoints, ConcurrentTransactionsWithSavepointsAndIsolation) {
     EXPECT_EQ(failures.load(), 0);
     // Every lease returned: nothing left active.
     EXPECT_EQ(db.value().pool().active_count(), 0u);
+
+    // Session state was restored for every transaction, or the connection would
+    // have been discarded (and active_count would still be 0, but these balances
+    // would not hold). Each of the kThreads*kIters transactions:
+    //   - flips autocommit off at begin and back on at end -> off == on == count
+    //   - sets isolation once at begin(iso) and restores it once at end -> 2*count
+    //   - ends with exactly one commit (all succeed; savepoint/nested rollbacks
+    //     are plain SQL, not SQLEndTran)
+    const long txns = static_cast<long>(kThreads) * kIters;
+    EXPECT_EQ(fake->autoCommitOff.load(), txns);
+    EXPECT_EQ(fake->autoCommitOn.load(), txns);
+    EXPECT_EQ(fake->setIsolationCalls.load(), 2 * txns);
+    EXPECT_EQ(fake->commitCalls.load(), txns);
 }

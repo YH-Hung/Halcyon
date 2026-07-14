@@ -82,6 +82,33 @@ TEST_F(Db2TxnV11, NestedSavepointsAndOuterRollback) {
     ASSERT_TRUE(tx.value().commit().ok());
 }
 
+// Spike: ROLLBACK TO an outer savepoint destroys savepoints established after
+// it. Unlike NestedSavepointsAndOuterRollback, the inner savepoint is left LIVE
+// (not released) so the "destroys later savepoints" rule is actually exercised.
+TEST_F(Db2TxnV11, OuterRollbackDestroysLaterSavepoint) {
+    auto tx = conn_->begin();
+    ASSERT_TRUE(tx.ok());
+    auto sp1 = tx.value().savepoint("outer_sp");
+    ASSERT_TRUE(sp1.ok()) << sp1.error().message;
+    ASSERT_TRUE(tx.value().execute("INSERT INTO halcyon_v11_txn VALUES (1)").ok());
+    auto sp2 = tx.value().savepoint("inner_sp");
+    ASSERT_TRUE(sp2.ok()) << sp2.error().message;
+    ASSERT_TRUE(tx.value().execute("INSERT INTO halcyon_v11_txn VALUES (2)").ok());
+    EXPECT_EQ(count(), 2);
+
+    // Roll back to the OUTER savepoint: undoes both inserts and destroys the
+    // later (inner) savepoint server-side.
+    ASSERT_TRUE(sp1.value().rollback().ok());
+    EXPECT_EQ(count(), 0);
+
+    // The inner savepoint no longer exists: rolling back to it now fails.
+    auto innerRb = sp2.value().rollback();
+    EXPECT_FALSE(innerRb.ok());
+
+    // outer_sp itself survives a ROLLBACK TO, so the transaction is still usable.
+    ASSERT_TRUE(tx.value().rollback().ok());
+}
+
 TEST_F(Db2TxnV11, NestedScopeErrorKeepsOuterWork) {
     auto tx = conn_->begin();
     ASSERT_TRUE(tx.ok());

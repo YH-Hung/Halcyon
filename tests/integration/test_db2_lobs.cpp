@@ -8,6 +8,7 @@
 #include <optional>
 #include <random>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <tuple>
 #include <utility>
@@ -107,7 +108,8 @@ TEST_F(Db2Lobs, Blob32MiBFileRoundTrip) {
 }
 
 TEST_F(Db2Lobs, StreamAndCallbackSourcesRoundTrip) {
-    const auto payload = random_bytes(4u * 1024u * 1024u, 7);
+    // ≥32 MiB through both stream and callback sources (plan Task 19 / spec §8).
+    const auto payload = random_bytes(kBigLob, 7);
     const std::uint64_t sum = fnv1a(payload.data(), payload.size());
 
     std::string asString(reinterpret_cast<const char*>(payload.data()),
@@ -224,6 +226,22 @@ TEST_F(Db2Lobs, MixedRowAscendingReads) {
     EXPECT_EQ(row->get<std::int64_t>(0).value(), 7);
     EXPECT_EQ(row->lob(1).value().toString().value(), "note part");
     EXPECT_EQ(row->lob(2).value().toString().value(), "binary part");
+}
+
+TEST_F(Db2Lobs, ThrowingSourceIsMappingErrorAndConnectionReusable) {
+    // A throwing LOB callback must not escape the seam or leave the statement in
+    // SQL_NEED_DATA state: the driver cancels and maps to a Mapping error, and
+    // the connection stays usable.
+    auto r = conn_->execute(
+        "INSERT INTO halcyon_v11_lobs(id, doc) VALUES (?, ?)", 99,
+        halcyon::lobCallback([](std::byte*, std::size_t) -> std::size_t {
+            throw std::runtime_error("source blew up");
+        }));
+    ASSERT_FALSE(r.ok());
+    EXPECT_EQ(r.error().code, halcyon::ErrorCode::Mapping);
+    auto rows =
+        conn_->queryAs<LobCountRow>("SELECT COUNT(*) FROM halcyon_v11_lobs");
+    ASSERT_TRUE(rows.ok()) << rows.error().message;  // connection still usable
 }
 
 TEST_F(Db2Lobs, AbandonMidStreamThenReuseConnection) {

@@ -49,6 +49,7 @@ public:
     std::atomic<long> rollbackCalls{0};
     std::atomic<long> autoCommitOff{0};
     std::atomic<long> autoCommitOn{0};
+    std::atomic<long> setIsolationCalls{0};
     std::atomic<long> inFlight{0};
     std::atomic<long> peakInFlight{0};
 
@@ -186,6 +187,7 @@ public:
         return Result<void>();
     }
     Result<void> setIsolation(ConnectionHandle, Isolation) override {
+        setIsolationCalls.fetch_add(1, std::memory_order_relaxed);
         return Result<void>();
     }
 
