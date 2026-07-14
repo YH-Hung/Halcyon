@@ -1,8 +1,10 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <list>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <utility>
 
@@ -178,11 +180,31 @@ private:
             }
     }
 
+    // Stable 16-hex-digit FNV-1a of the SQL text. Logged instead of the raw SQL
+    // (spec §3 A.3) so log lines carry no query text — bounding what leaks into
+    // logs and sidestepping logfmt-escaping of arbitrary SQL.
+    static std::string sql_hash(std::string_view sql) {
+        std::uint64_t h = 1469598103934665603ull;
+        for (char c : sql) {
+            h ^= static_cast<unsigned char>(c);
+            h *= 1099511628211ull;
+        }
+        static const char kHex[] = "0123456789abcdef";
+        std::string out(16, '0');
+        for (int i = 15; i >= 0; --i) {
+            out[static_cast<std::size_t>(i)] = kHex[h & 0xF];
+            h >>= 4;
+        }
+        return out;
+    }
+
     void evict(StmtCacheEntry* e) {
         // Log before erase_entry(e) destroys the entry (and its key string).
-        if (logger_ != nullptr)
+        if (logger_ != nullptr) {
+            const std::string h = sql_hash(e->key);
             logger_->log(obs::LogLevel::Debug, "stmt_cache.evict",
-                         {{"sql", e->key}});
+                         {{"sql_hash", h}});
+        }
         driver_->finalize(e->handle);
         erase_entry(e);
         emit("evict");

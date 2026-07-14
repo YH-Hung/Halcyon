@@ -1,6 +1,7 @@
 #include <chrono>
 #include <cstdio>
 #include <string>
+#include <string_view>
 #include <type_traits>
 #include <variant>
 
@@ -10,6 +11,55 @@ namespace halcyon::obs {
 
 namespace {
 
+// Appends a string as a safe logfmt token: raw when it has no delimiter- or
+// injection-relevant characters, otherwise double-quoted with escaping. Without
+// this, a value containing a space (e.g. raw SQL) breaks `key=value` parsing and
+// a newline injects a forged log line.
+void append_logfmt_string(std::string& out, std::string_view s) {
+    bool needsQuote = s.empty();
+    for (char c : s) {
+        const unsigned char u = static_cast<unsigned char>(c);
+        if (u <= 0x20 || c == '"' || c == '=' || c == '\\') {
+            needsQuote = true;
+            break;
+        }
+    }
+    if (!needsQuote) {
+        out.append(s.data(), s.size());
+        return;
+    }
+    out += '"';
+    for (char c : s) {
+        switch (c) {
+            case '"':
+                out += "\\\"";
+                break;
+            case '\\':
+                out += "\\\\";
+                break;
+            case '\n':
+                out += "\\n";
+                break;
+            case '\r':
+                out += "\\r";
+                break;
+            case '\t':
+                out += "\\t";
+                break;
+            default:
+                if (static_cast<unsigned char>(c) < 0x20) {
+                    char buf[5];
+                    std::snprintf(buf, sizeof(buf), "\\x%02x",
+                                  static_cast<unsigned char>(c));
+                    out += buf;
+                } else {
+                    out += c;
+                }
+        }
+    }
+    out += '"';
+}
+
 void append_value(
     std::string& out,
     const std::variant<std::int64_t, double, bool, std::string_view>& v) {
@@ -17,7 +67,7 @@ void append_value(
         [&out](const auto& x) {
             using X = std::decay_t<decltype(x)>;
             if constexpr (std::is_same_v<X, std::string_view>)
-                out.append(x.data(), x.size());
+                append_logfmt_string(out, x);
             else if constexpr (std::is_same_v<X, bool>)
                 out += x ? "true" : "false";
             else

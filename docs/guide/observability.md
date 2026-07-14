@@ -150,10 +150,12 @@ cfg.observability.logger = std::make_shared<halcyon::obs::StderrLogger>();
 ```
 
 Events emitted: `connect.ok`/`connect.fail`, `reconnect.attempt`/`.ok`/`.fail`,
-`retry.attempt`, `pool.exhausted`, `pool.reap`, `stmt_cache.evict`,
-`txn.poisoned`, `savepoint.poisoned`, `isolation.restore_fail` (surfaced via
-`txn.poisoned`). `StderrLogger` prints one logfmt line per event:
-`ts=1720000000 level=warn event=retry.attempt outcome=retried`.
+`retry.attempt`, `pool.exhausted`, `pool.reap`, `stmt_cache.evict` (carries a
+`sql_hash`, never the raw SQL), `txn.poisoned`, `savepoint.poisoned`, and
+`isolation.restore_fail` (emitted when restoring the pre-override isolation
+level fails, alongside the `txn.poisoned` it triggers). `StderrLogger` prints
+one logfmt line per event, quoting/escaping any value that contains
+whitespace or delimiters: `ts=1720000000 level=warn event=retry.attempt outcome=retried`.
 
 ## Disabling observability at compile time
 
