@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <clocale>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -288,4 +289,43 @@ TEST(Savepoint, ExplicitNameCollidesWithAutoNameCaseInsensitively) {
     ASSERT_FALSE(clash.ok());
     EXPECT_EQ(clash.error().code, halcyon::ErrorCode::InvalidArgument);
     ASSERT_TRUE(autoSp.value().release().ok());
+}
+
+namespace {
+// Restores LC_CTYPE on scope exit so a locale flip can't leak into other tests.
+struct LocaleGuard {
+    std::string saved;
+    LocaleGuard() {
+        const char* s = std::setlocale(LC_CTYPE, nullptr);
+        saved = s ? s : "C";
+    }
+    ~LocaleGuard() { std::setlocale(LC_CTYPE, saved.c_str()); }
+};
+}  // namespace
+
+TEST(Savepoint, NameGateIsAsciiOnlyRegardlessOfLocale) {
+    LocaleGuard guard;
+    // Best-effort switch to a Latin-1 locale where <cctype> would classify 0xE9
+    // (e-acute) as a letter and fold 0xE9/0xC9 together. A no-op if the locale
+    // is not installed; the assertions are ASCII-only either way.
+    std::setlocale(LC_CTYPE, "fr_FR.ISO8859-1");
+
+    using halcyon::detail::valid_savepoint_name;
+    EXPECT_FALSE(valid_savepoint_name("\xE9"));      // non-ASCII first char
+    EXPECT_FALSE(valid_savepoint_name("caf\xE9"));   // non-ASCII trailing char
+    EXPECT_TRUE(valid_savepoint_name("cafe"));       // ASCII still accepted
+
+    // The reuse comparator must not conflate e-acute (0xE9) and E-acute (0xC9):
+    // ASCII folding leaves non-ASCII bytes unchanged, so they stay distinct.
+    halcyon::detail::SavepointNameLess less;
+    const std::string lo("\xE9"), up("\xC9");
+    EXPECT_TRUE(less(lo, up) != less(up, lo));  // strictly ordered => not equal
+
+    // And through the public API: a non-ASCII savepoint name is rejected.
+    Fixture f;
+    auto tx = f.conn->begin();
+    ASSERT_TRUE(tx.ok());
+    auto sp = tx.value().savepoint("caf\xE9");
+    ASSERT_FALSE(sp.ok());
+    EXPECT_EQ(sp.error().code, halcyon::ErrorCode::InvalidArgument);
 }

@@ -1,7 +1,6 @@
 #pragma once
 
 #include <algorithm>
-#include <cctype>
 #include <cstdint>
 #include <optional>
 #include <set>
@@ -21,23 +20,37 @@ namespace halcyon {
 
 namespace detail {
 
+// Fixed ASCII classification/folding, deliberately NOT the <cctype> functions:
+// std::isalpha/isalnum/toupper follow the process LC_CTYPE, so under a non-C
+// locale non-ASCII bytes would pass the gate and fold — making the injection
+// defense and the reuse registry depend on mutable process state.
+constexpr bool ascii_alpha(unsigned char c) noexcept {
+    return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z');
+}
+constexpr bool ascii_alnum(unsigned char c) noexcept {
+    return ascii_alpha(c) || (c >= '0' && c <= '9');
+}
+constexpr char ascii_upper(unsigned char c) noexcept {
+    return (c >= 'a' && c <= 'z') ? static_cast<char>(c - 'a' + 'A')
+                                  : static_cast<char>(c);
+}
+
 // Savepoint statements cannot be parameterized, so the name is interpolated
 // into SQL. This whitelist is the injection defense — a hard gate, not a
 // convention: [A-Za-z_][A-Za-z0-9_]{0,127}, not starting with SYS (Db2
-// reserves that prefix).
+// reserves that prefix). ASCII-only, independent of the process locale.
 inline bool valid_savepoint_name(std::string_view name) {
     if (name.empty() || name.size() > 128) return false;
     const auto first = static_cast<unsigned char>(name[0]);
-    if (!std::isalpha(first) && name[0] != '_') return false;
+    if (!ascii_alpha(first) && name[0] != '_') return false;
     for (char ch : name.substr(1)) {
         const auto c = static_cast<unsigned char>(ch);
-        if (!std::isalnum(c) && ch != '_') return false;
+        if (!ascii_alnum(c) && ch != '_') return false;
     }
     if (name.size() >= 3) {
-        auto up = [](char c) {
-            return static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
-        };
-        if (up(name[0]) == 'S' && up(name[1]) == 'Y' && up(name[2]) == 'S')
+        if (ascii_upper(static_cast<unsigned char>(name[0])) == 'S' &&
+            ascii_upper(static_cast<unsigned char>(name[1])) == 'Y' &&
+            ascii_upper(static_cast<unsigned char>(name[2])) == 'S')
             return false;
     }
     return true;
@@ -47,12 +60,13 @@ inline bool valid_savepoint_name(std::string_view name) {
 // identifier to uppercase, so `case_alias` and `CASE_ALIAS` denote the SAME
 // server-side savepoint; the live-name registry must treat them as equal or a
 // case variant would bypass the reuse guard and retarget a stale C++ guard.
+// ASCII folding only (see ascii_upper) so the ordering never depends on locale.
 struct SavepointNameLess {
     bool operator()(const std::string& a, const std::string& b) const noexcept {
         return std::lexicographical_compare(
             a.begin(), a.end(), b.begin(), b.end(),
             [](unsigned char x, unsigned char y) {
-                return std::toupper(x) < std::toupper(y);
+                return ascii_upper(x) < ascii_upper(y);
             });
     }
 };
