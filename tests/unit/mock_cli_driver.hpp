@@ -209,6 +209,7 @@ public:
 
     Result<void> closeCursor(StatementHandle stmt) override {
         ++closeCursorCalls;
+        if (onCloseCursor) onCloseCursor();
         auto it = statements.find(stmt);
         if (it != statements.end()) it->second.position = -1;  // cursor reset
         if (!closeCursorErrors.empty()) {
@@ -223,6 +224,11 @@ public:
     std::vector<StatementHandle> finalized;
     int closeCursorCalls = 0;
     std::deque<Error> closeCursorErrors;  // next closeCursor() fails with each
+    // Ordering probes: invoked at the top of closeCursor()/rollback() so a test
+    // can record when the cursor/transaction is torn down relative to other
+    // observable events (e.g. the pool gauge emitted when a lease returns).
+    std::function<void()> onCloseCursor;
+    std::function<void()> onRollback;
 
     // --- transaction scripting (Plan 4) ---
     std::deque<Error> txnErrors;  // next setAutoCommit/commit/rollback fails
@@ -243,6 +249,7 @@ public:
     Result<void> rollback(ConnectionHandle handle) override {
         (void)handle;
         ++rollbackCalls;
+        if (onRollback) onRollback();
         return next_txn_result();
     }
 

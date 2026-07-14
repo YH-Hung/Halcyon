@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cstring>
 #include <fstream>
 #include <memory>
@@ -25,6 +26,22 @@ struct Fixture {
     explicit Fixture(std::size_t cacheSize = 0) {
         auto c = Connection::open(drv, {"dsn"}, cacheSize);
         conn = std::make_unique<Connection>(std::move(c.value()));
+    }
+};
+
+// Records "release" whenever the pool emits its connections gauge — i.e. when a
+// lease returns to the pool. Combined with the mock's onCloseCursor/onRollback
+// probes, a test can assert the cursor/transaction is torn down BEFORE the
+// connection returns (the ordering the custom move-assignments guarantee).
+struct OrderSink final : halcyon::obs::MetricsSink {
+    std::vector<std::string>* log;
+    explicit OrderSink(std::vector<std::string>* l) : log(l) {}
+    void counter(std::string_view, double, const halcyon::obs::Labels&) override {}
+    void histogram(std::string_view, double,
+                   const halcyon::obs::Labels&) override {}
+    void gauge(std::string_view name, double,
+               const halcyon::obs::Labels&) override {
+        if (name == "halcyon_pool_connections") log->push_back("release");
     }
 };
 
@@ -235,30 +252,92 @@ TEST(DatabaseStreaming, RowsStreamAndLeaseReturnsToPool) {
     EXPECT_EQ(db.value().pool().idle_count(), 1u);  // lease returned
 }
 
-TEST(DatabaseStreaming, MoveAssignClosesOldCursorBeforeReturningLease) {
+// The move-assignment must close the old cursor BEFORE returning the old
+// connection to the pool. A single-threaded functional check cannot see the
+// ordering (the broken default also eventually closes the cursor), so these
+// tests record the exact interleaving: with the fix, "close"/"rollback" precede
+// the pool "release"; the broken default memberwise assignment reverses them.
+TEST(DatabaseStreaming, MoveAssignClosesCursorBeforeLeaseReturns) {
     MockCliDriver drv;
+    std::vector<std::string> order;
     halcyon::PoolConfig cfg;
-    cfg.min = 1;
+    cfg.min = 2;
     cfg.max = 2;
     cfg.startMaintenanceThread = false;
+    cfg.statementCacheSize = 8;  // cached lease -> closeCursor on release
+    cfg.observability.metrics = std::make_shared<OrderSink>(&order);
     auto db = halcyon::Database::open(drv, "dsn", cfg);
     ASSERT_TRUE(db.ok());
-    drv.resultSets.push_back({{"doc"}, {{Value{std::string{"first"}}}}});
-    drv.resultSets.push_back({{"doc"}, {{Value{std::string{"second"}}}}});
-
+    drv.resultSets.push_back({{"doc"}, {{Value{std::string{"a"}}}}});
+    drv.resultSets.push_back({{"doc"}, {{Value{std::string{"b"}}}}});
     auto a = db.value().queryStreaming("SELECT doc FROM t").value();
-    ASSERT_TRUE(a.next().has_value());  // cursor A live on conn 1
+    ASSERT_TRUE(a.next().has_value());
     auto b = db.value().queryStreaming("SELECT doc FROM t").value();
-    ASSERT_TRUE(b.next().has_value());  // cursor B live on conn 2
+    ASSERT_TRUE(b.next().has_value());
 
-    const int closesBefore = drv.closeCursorCalls;
-    a = std::move(b);  // custom move-assign: close cursor A before its lease returns
-    EXPECT_GT(drv.closeCursorCalls, closesBefore);  // old cursor A was closed
+    drv.onCloseCursor = [&] { order.push_back("close"); };
+    order.clear();
+    a = std::move(b);
+    drv.onCloseCursor = nullptr;
 
-    // The moved-into result now owns cursor B (its single row was already
-    // consumed), and remains usable with no double-return.
-    EXPECT_FALSE(a.next().has_value());
-    EXPECT_TRUE(a.ok());
+    auto firstClose = std::find(order.begin(), order.end(), "close");
+    auto firstRelease = std::find(order.begin(), order.end(), "release");
+    ASSERT_NE(firstClose, order.end());    // old cursor was closed
+    ASSERT_NE(firstRelease, order.end());  // old connection returned
+    EXPECT_LT(firstClose, firstRelease);   // closed BEFORE the connection returned
+}
+
+TEST(DatabaseQuery, MoveAssignClosesCursorBeforeLeaseReturns) {
+    MockCliDriver drv;
+    std::vector<std::string> order;
+    halcyon::PoolConfig cfg;
+    cfg.min = 2;
+    cfg.max = 2;
+    cfg.startMaintenanceThread = false;
+    cfg.statementCacheSize = 8;
+    cfg.observability.metrics = std::make_shared<OrderSink>(&order);
+    auto db = halcyon::Database::open(drv, "dsn", cfg);
+    ASSERT_TRUE(db.ok());
+    drv.resultSets.push_back({{"n"}, {{Value{std::int64_t{1}}}}});
+    drv.resultSets.push_back({{"n"}, {{Value{std::int64_t{2}}}}});
+    auto a = db.value().query("SELECT n FROM t").value();
+    auto b = db.value().query("SELECT n FROM t").value();
+
+    drv.onCloseCursor = [&] { order.push_back("close"); };
+    order.clear();
+    a = std::move(b);
+    drv.onCloseCursor = nullptr;
+
+    auto firstClose = std::find(order.begin(), order.end(), "close");
+    auto firstRelease = std::find(order.begin(), order.end(), "release");
+    ASSERT_NE(firstClose, order.end());
+    ASSERT_NE(firstRelease, order.end());
+    EXPECT_LT(firstClose, firstRelease);
+}
+
+TEST(DatabaseScopedTxn, MoveAssignEndsTransactionBeforeLeaseReturns) {
+    MockCliDriver drv;
+    std::vector<std::string> order;
+    halcyon::PoolConfig cfg;
+    cfg.min = 2;
+    cfg.max = 2;
+    cfg.startMaintenanceThread = false;
+    cfg.observability.metrics = std::make_shared<OrderSink>(&order);
+    auto db = halcyon::Database::open(drv, "dsn", cfg);
+    ASSERT_TRUE(db.ok());
+    auto a = db.value().begin().value();  // active transaction on conn 1
+    auto b = db.value().begin().value();  // active transaction on conn 2
+
+    drv.onRollback = [&] { order.push_back("rollback"); };
+    order.clear();
+    a = std::move(b);  // old a's transaction must roll back before its lease returns
+    drv.onRollback = nullptr;
+
+    auto firstRollback = std::find(order.begin(), order.end(), "rollback");
+    auto firstRelease = std::find(order.begin(), order.end(), "release");
+    ASSERT_NE(firstRollback, order.end());  // old transaction was rolled back
+    ASSERT_NE(firstRelease, order.end());
+    EXPECT_LT(firstRollback, firstRelease);  // ended BEFORE the connection returned
 }
 
 TEST(DatabaseStreaming, ConnectionErrorDiscardsLease) {
