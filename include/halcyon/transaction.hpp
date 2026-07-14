@@ -194,6 +194,9 @@ private:
         if (!restoreIsolation_) return Result<void>();
         auto r = conn_->driver().setIsolation(conn_->handle(), *restoreIsolation_);
         restoreIsolation_.reset();
+        if (!r.ok() && conn_ != nullptr && conn_->logger() != nullptr)
+            conn_->logger()->log(obs::LogLevel::Error, "isolation.restore_fail",
+                                 {{"code", to_string(r.error().code)}});
         return r;
     }
 
@@ -347,6 +350,11 @@ auto Transaction::nested(Fn&& fn) -> std::invoke_result_t<Fn, Transaction&> {
         }
     }();
     if (!active_) {
+        // fn ended the transaction (commit/rollback inside nested()): the
+        // savepoint no longer exists, so disarm the guard. Otherwise its
+        // destructor would run ROLLBACK TO / RELEASE on an ended transaction,
+        // fail, and needlessly poison and discard the pooled connection.
+        sp.value().active_ = false;
         Error e;
         e.code = ErrorCode::InvalidState;
         e.message = "transaction ended inside nested scope "

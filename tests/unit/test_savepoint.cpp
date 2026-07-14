@@ -189,6 +189,12 @@ TEST(NestedTransaction, CommitInsideScopeIsInvalidState) {
         });
     ASSERT_FALSE(r.ok());
     EXPECT_EQ(r.error().code, halcyon::ErrorCode::InvalidState);
+    // The savepoint guard must be disarmed: no ROLLBACK TO / RELEASE may be
+    // issued against the now-ended transaction (against live Db2 those would
+    // fail and poison the connection). The mock succeeds silently, so assert on
+    // the emitted SQL rather than on poisoning.
+    EXPECT_FALSE(prepared(f.drv, "ROLLBACK TO SAVEPOINT halcyon_sp_1"));
+    EXPECT_FALSE(prepared(f.drv, "RELEASE SAVEPOINT halcyon_sp_1"));
 }
 
 TEST(NestedTransaction, NestedInNestedUsesSecondSavepoint) {
