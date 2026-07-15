@@ -206,7 +206,7 @@ TEST_F(Db2TxnV11, UncommittedReadSeesInFlightRowAndCursorStabilityDoesNot) {
         auto rows = cs.value().queryAs<CountRow>(
             "SELECT COUNT(*) FROM halcyon_v11_txn");
         ASSERT_TRUE(rows.ok()) << rows.error().message;  // no block, no timeout
-        EXPECT_EQ(rows.value().at(0).c, 0);  // uncommitted insert not visible
+        EXPECT_EQ(rows.value().at(0).c, 0);              // uncommitted insert not visible
         ASSERT_TRUE(cs.value().commit().ok());
     }
     ASSERT_TRUE(wtx.value().rollback().ok());

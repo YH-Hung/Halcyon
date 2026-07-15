@@ -62,8 +62,8 @@ TEST(StderrLogger, QuotesAndEscapesUnsafeValues) {
     // escaped, so it did not split the record.
     EXPECT_EQ(std::count(line.begin(), line.end(), '\n'), 1);
     EXPECT_NE(line.find("sql=\"SELECT a FROM t"), std::string::npos);  // quoted
-    EXPECT_NE(line.find("\\n"), std::string::npos);   // newline escaped
-    EXPECT_NE(line.find("b=1\""), std::string::npos);  // '=' inside stays quoted
+    EXPECT_NE(line.find("\\n"), std::string::npos);                    // newline escaped
+    EXPECT_NE(line.find("b=1\""), std::string::npos);                  // '=' inside stays quoted
     std::fclose(f);
 }
 

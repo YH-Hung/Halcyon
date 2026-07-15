@@ -183,7 +183,13 @@ TEST(StatementCacheLogging, EvictionIsLogged) {
     ASSERT_TRUE(conn.ok());
     halcyon::detail::StatementCache cache(drv, conn.value(), /*capacity=*/1,
                                           /*metrics=*/nullptr, &logger);
-    { auto a = cache.acquire("SELECT 1"); ASSERT_TRUE(a.ok()); }
-    { auto b = cache.acquire("SELECT 2"); ASSERT_TRUE(b.ok()); }  // evicts SELECT 1
+    {
+        auto a = cache.acquire("SELECT 1");
+        ASSERT_TRUE(a.ok());
+    }
+    {
+        auto b = cache.acquire("SELECT 2");
+        ASSERT_TRUE(b.ok());
+    }  // evicts SELECT 1
     EXPECT_EQ(logger.count("stmt_cache.evict"), 1u);
 }

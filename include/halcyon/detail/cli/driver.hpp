@@ -50,7 +50,7 @@ struct ParamStreamSource {
     // npos on source failure (aborts the execute).
     std::function<std::size_t(std::byte* buf, std::size_t cap)> pull;
     std::optional<std::uint64_t> sizeHint;  // total bytes if known
-    bool isClob = false;  // bind SQL_CLOB/SQL_C_CHAR instead of SQL_BLOB/SQL_C_BINARY
+    bool isClob = false;                    // bind SQL_CLOB/SQL_C_CHAR instead of SQL_BLOB/SQL_C_BINARY
 };
 
 class ICliDriver {

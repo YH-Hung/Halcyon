@@ -203,7 +203,7 @@ public:
     // balance (which cannot detect a wrong value or offsetting per-connection
     // errors).
     struct ConnState {
-        bool autocommit = true;  // Db2 default: autocommit on
+        bool autocommit = true;              // Db2 default: autocommit on
         std::optional<Isolation> isolation;  // unset = server default (CS)
     };
     std::vector<ConnState> connection_states() {

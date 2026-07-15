@@ -35,7 +35,7 @@ public:
         std::string sql;
         std::vector<Value> boundParams;
         ScriptedRows cursor;
-        long position = -1;  // -1 before first fetch
+        long position = -1;                   // -1 before first fetch
         std::vector<std::size_t> lobOffsets;  // per-column getDataChunk progress
     };
 

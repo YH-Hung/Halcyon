@@ -91,7 +91,10 @@ TEST(Savepoint, DestructorRollsBackAndReleases) {
     Fixture f;
     auto tx = f.conn->begin();
     ASSERT_TRUE(tx.ok());
-    { auto sp = tx.value().savepoint(); ASSERT_TRUE(sp.ok()); }
+    {
+        auto sp = tx.value().savepoint();
+        ASSERT_TRUE(sp.ok());
+    }
     EXPECT_TRUE(prepared(f.drv, "ROLLBACK TO SAVEPOINT halcyon_sp_1"));
     EXPECT_TRUE(prepared(f.drv, "RELEASE SAVEPOINT halcyon_sp_1"));
 }
@@ -236,7 +239,10 @@ TEST(Savepoint, NameFreedAfterGuardDestroyed) {
     Fixture f;
     auto tx = f.conn->begin();
     ASSERT_TRUE(tx.ok());
-    { auto sp = tx.value().savepoint("scoped"); ASSERT_TRUE(sp.ok()); }  // dtor frees
+    {
+        auto sp = tx.value().savepoint("scoped");
+        ASSERT_TRUE(sp.ok());
+    }  // dtor frees
     auto sp2 = tx.value().savepoint("scoped");
     EXPECT_TRUE(sp2.ok());
     ASSERT_TRUE(sp2.value().release().ok());
@@ -284,7 +290,7 @@ TEST(Savepoint, ExplicitNameCollidesWithAutoNameCaseInsensitively) {
     ASSERT_TRUE(tx.ok());
     auto autoSp = tx.value().savepoint();  // halcyon_sp_1
     ASSERT_TRUE(autoSp.ok());
-    EXPECT_EQ(autoSp.value().name(), "halcyon_sp_1");  // original spelling kept
+    EXPECT_EQ(autoSp.value().name(), "halcyon_sp_1");   // original spelling kept
     auto clash = tx.value().savepoint("HALCYON_SP_1");  // same, case-folded
     ASSERT_FALSE(clash.ok());
     EXPECT_EQ(clash.error().code, halcyon::ErrorCode::InvalidArgument);
@@ -311,9 +317,9 @@ TEST(Savepoint, NameGateIsAsciiOnlyRegardlessOfLocale) {
     std::setlocale(LC_CTYPE, "fr_FR.ISO8859-1");
 
     using halcyon::detail::valid_savepoint_name;
-    EXPECT_FALSE(valid_savepoint_name("\xE9"));      // non-ASCII first char
-    EXPECT_FALSE(valid_savepoint_name("caf\xE9"));   // non-ASCII trailing char
-    EXPECT_TRUE(valid_savepoint_name("cafe"));       // ASCII still accepted
+    EXPECT_FALSE(valid_savepoint_name("\xE9"));     // non-ASCII first char
+    EXPECT_FALSE(valid_savepoint_name("caf\xE9"));  // non-ASCII trailing char
+    EXPECT_TRUE(valid_savepoint_name("cafe"));      // ASCII still accepted
 
     // The reuse comparator must not conflate e-acute (0xE9) and E-acute (0xC9):
     // ASCII folding leaves non-ASCII bytes unchanged, so they stay distinct.

@@ -9,7 +9,10 @@
 
 namespace halcyon::obs {
 
-enum class LogLevel { Debug, Info, Warn, Error };
+enum class LogLevel { Debug,
+                      Info,
+                      Warn,
+                      Error };
 
 inline const char* to_string(LogLevel level) noexcept {
     switch (level) {

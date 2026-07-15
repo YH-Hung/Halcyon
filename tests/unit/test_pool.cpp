@@ -403,7 +403,7 @@ TEST(PoolLogging, ConnectOkAndFailAreLogged) {
     boom.sqlstate = "08001";
     drv.connectErrors.push_back(boom);
     drv.connectErrors.push_back(boom);
-    drv.connectErrors.push_back(boom);  // exhaust default 3 backoff attempts
+    drv.connectErrors.push_back(boom);      // exhaust default 3 backoff attempts
     auto lease1 = pool.value()->acquire();  // idle slot: ok
     ASSERT_TRUE(lease1.ok());
     auto lease2 = pool.value()->acquire();  // must connect: fails
@@ -458,7 +458,10 @@ TEST(PoolLogging, ReapIsLogged) {
     cfg.observability.logger = logger;
     auto pool = halcyon::ConnectionPool::create(drv, {"dsn"}, cfg);
     ASSERT_TRUE(pool.ok());
-    { auto lease = pool.value()->acquire(); ASSERT_TRUE(lease.ok()); }  // release -> idle
+    {
+        auto lease = pool.value()->acquire();
+        ASSERT_TRUE(lease.ok());
+    }  // release -> idle
     pool.value()->maintain();
     EXPECT_EQ(logger->count("pool.reap"), 1u);
 }
