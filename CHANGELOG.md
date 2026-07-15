@@ -9,9 +9,8 @@ public C++ API (see "Versioning & compatibility" in the README).
 
 ## 1.1.0 - 2026-07-13
 
-Transactions & large data. No GitHub Release or `v1.1.0` tag has been published
-yet; consumers should pin `main`, a reviewed commit, or a release tag once one
-exists.
+Transactions & large data. Published as
+[`v1.1.0`](https://github.com/YH-Hung/Halcyon/releases/tag/v1.1.0).
 
 ### Added
 - Savepoints: RAII `Savepoint` guard (`Transaction::savepoint()`) with
@@ -36,9 +35,8 @@ exists.
 ## 1.0.0 - 2026-07-01
 
 First stable source tree. Source-consumption ready via `find_package(Halcyon)`
-and CMake `FetchContent`. No GitHub Release or `v1.0.0` tag has been published
-yet; consumers should pin `main`, a reviewed commit, or a release tag once one
-exists.
+and CMake `FetchContent`. Published as
+[`v1.0.0`](https://github.com/YH-Hung/Halcyon/releases/tag/v1.0.0).
 
 ### Added
 - High-level `Database` facade with OO/fluent and functional free-function styles.
