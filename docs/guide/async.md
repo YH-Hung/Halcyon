@@ -21,8 +21,12 @@ if (!r.ok())
 ## `queryAsync<T>` — parallel reads
 
 `queryAsync` materialises rows into `std::vector<T>` — the future carries the
-full result set, not a live cursor. This is intentional: a live cursor cannot be
-passed across thread boundaries safely.
+full result set, not a live cursor. This is intentional for the `std::future`
+API: a `std::future<QueryResult>` would hand a live cursor to whatever thread
+happens to call `.get()`, with no coordination of when the owning worker is
+done with it. For awaitable streaming over a live cursor, the C++20 coroutine
+layer (`halcyon::coro::queryStreaming`) sequences all handle access through its
+awaits — see the [Coroutines guide](coroutines.md#async-streaming).
 
 ```cpp
 // Returns std::future<Result<std::vector<Product>>>
