@@ -350,3 +350,63 @@ TEST(CoroExecute, LobStreamReferentOutlivingTaskRoundTrips) {
     ASSERT_EQ(driver.lastStreamedLobs.count(1), 1u);
     EXPECT_EQ(driver.lastStreamedLobs[1].size(), 8u);
 }
+
+struct Num {
+    std::int64_t n;
+};
+HALCYON_REFLECT(Num, n);
+
+TEST(CoroQuery, ParityWithQueryAsyncMaterialization) {
+    MockCliDriver driver;
+    driver.resultSets.push_back(MockCliDriver::ScriptedRows{
+        {"n"},
+        {{halcyon::detail::cli::Value{std::int64_t{2}}},
+         {halcyon::detail::cli::Value{std::int64_t{5}}}}});
+    auto db = Database::open(driver, "X", noThread()).value();
+    auto r = syncWait(halcyon::coro::query<Num>(db, "SELECT n FROM t"));
+    ASSERT_TRUE(r.ok()) << r.error().message;
+    ASSERT_EQ(r.value().size(), 2u);
+    EXPECT_EQ(r.value()[0].n, 2);
+    EXPECT_EQ(r.value()[1].n, 5);
+}
+
+TEST(CoroQuery, NamedParamsOverload) {
+    MockCliDriver driver;
+    driver.resultSets.push_back(MockCliDriver::ScriptedRows{
+        {"n"}, {{halcyon::detail::cli::Value{std::int64_t{9}}}}});
+    auto db = Database::open(driver, "X", noThread()).value();
+    auto r = syncWait(halcyon::coro::query<Num>(
+        db, "SELECT n FROM t WHERE id=:id", halcyon::params{{"id", 1}}));
+    ASSERT_TRUE(r.ok());
+    ASSERT_EQ(r.value().size(), 1u);
+    EXPECT_EQ(r.value()[0].n, 9);
+}
+
+// The documented throwing idiom: (co_await …).value().
+TEST(CoroQuery, ThrowingIdiomUnwraps) {
+    MockCliDriver driver;
+    driver.resultSets.push_back(MockCliDriver::ScriptedRows{
+        {"n"}, {{halcyon::detail::cli::Value{std::int64_t{1}}}}});
+    auto db = Database::open(driver, "X", noThread()).value();
+    auto probe = [](Database& d) -> Task<std::size_t> {
+        auto rows = (co_await halcyon::coro::query<Num>(d, "SELECT n FROM t"))
+                        .value();
+        co_return rows.size();
+    };
+    EXPECT_EQ(syncWait(probe(db)), 1u);
+}
+
+TEST(CoroExecuteBatch, ParityWithSyncExecuteBatch) {
+    MockCliDriver driver;
+    driver.batchRowCounts.push_back(3);
+    auto db = Database::open(driver, "X", noThread()).value();
+    auto batch = halcyon::batchOf({std::make_tuple(1, std::string{"a"}),
+                                   std::make_tuple(2, std::string{"b"}),
+                                   std::make_tuple(3, std::string{"c"})});
+    auto r = syncWait(halcyon::coro::executeBatch(
+        db, "INSERT INTO t(id, name) VALUES (?, ?)", std::move(batch)));
+    ASSERT_TRUE(r.ok()) << r.error().message;
+    EXPECT_EQ(r.value(), 3);
+    EXPECT_EQ(driver.executeBatchCalls, 1);
+    ASSERT_EQ(driver.lastBatchRows.size(), 3u);
+}
