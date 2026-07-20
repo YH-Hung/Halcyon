@@ -111,3 +111,31 @@ halcyon::ConnectionPool& pool = db.pool();
 `ConnectionPool` is non-copyable and non-movable. It is kept alive by the
 `Database`'s internal `shared_ptr`; do not store raw references beyond the
 `Database`'s lifetime.
+
+## Pool health stats
+
+`Database::poolStats()` (forwarding to `ConnectionPool::stats()`) returns a
+`PoolStats` snapshot taken under a single lock acquisition, so it is
+internally consistent: within one snapshot `busy <= size` and
+`idle + busy == size` always hold.
+
+```cpp
+halcyon::PoolStats s = db.poolStats();
+std::cout << s.busy << "/" << s.size << " busy, peak " << s.peakBusy
+          << ", waiters " << s.waiters << "\n";
+```
+
+| Field | Meaning |
+|---|---|
+| `size` | connections currently owned (idle + busy) |
+| `idle` / `busy` | point-in-time split of `size` |
+| `waiters` | threads currently blocked in `acquire()` |
+| `peakBusy` | busy high-water mark since pool construction |
+| `createdTotal` | physical connections established (incl. reconnects) |
+| `acquiredTotal` | successful `acquire()` calls |
+| `acquireTimeoutsTotal` | `acquire()` timeouts |
+| `reapedIdleTotal` / `reapedLifetimeTotal` | maintenance reaps by cause |
+| `discardedTotal` | poisoned + validation discards (a dead connection replaced by transparent reconnect counts — its predecessor was discarded) |
+
+This is a programmatic accessor; the optional Prometheus gauge/counter
+emission is unchanged and independent.

@@ -91,15 +91,22 @@ if (!r.ok()) {
 }
 ```
 
-## No async streaming
+## Async streaming
 
-There is no `std::future<QueryResult>` — a streaming cursor tied to a pooled
-connection cannot be safely moved across thread boundaries. Use `queryAsync<T>`
-(materialised) for async reads. If you need async streaming, drain the cursor
-inside the async task and return a `std::vector`.
+v1.2 adds true async streaming — in the C++20 coroutine layer. An earlier
+version of this page claimed a streaming cursor "cannot be safely moved
+across thread boundaries"; the actual contract is narrower: IBM CLI handles
+may be used from different threads provided access is coordinated and never
+concurrent (IBM Db2 11.1 documentation, "Handles" and "Multithreaded CLI
+applications"). Halcyon's coroutine await sequencing provides exactly that
+coordination, so `halcyon::coro::queryStreaming` streams rows and LOB chunks
+awaitably — see the [Coroutines guide](coroutines.md).
 
-## Coroutine readiness
+In the `std::future` API there is still no `std::future<QueryResult>`: use
+`queryAsync<T>` (materialised) for future-based async reads.
 
-The executor's `submit()` method is a standard thread-pool chokepoint compatible
-with a future C++20 coroutine adapter. The current `std::future` API can be
-wrapped by a coroutine adapter without changing any internals.
+## Coroutines
+
+The C++20 coroutine layer shipped in v1.2: `halcyon/coro.hpp` wraps this
+executor with awaitable `execute`/`query`/`executeBatch`/`transaction` and
+async streaming. See the [Coroutines guide](coroutines.md).

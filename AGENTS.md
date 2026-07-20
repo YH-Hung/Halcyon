@@ -37,6 +37,7 @@ leak `sqlcli1.h` types into public headers.
 
 - `include/halcyon/` — public headers (umbrella: `halcyon.hpp`).
 - `include/halcyon/detail/cli/` — the seam (`ICliDriver`, opaque handles).
+- `include/halcyon/coro.hpp`, `include/halcyon/coro/` — C++20 coroutine layer (opt-in header; C++17 consumers never see it).
 - `src/{detail/cli,core,pool,facade,observability}/` — implementation by layer.
 - `tests/unit/` — unit tests; mock the seam via `MockCliDriver` (no live DB).
 - `tests/integration/` — Dockerized Db2 tests (CTest label `integration`, opt-in).
@@ -144,8 +145,12 @@ driver whose provenance you trust.
 
 ## Conventions
 
-- **Standard:** C++17 only. No C++20 features (coroutines are a *future* layer;
-  keep extension points, don't add awaitables yet).
+- **Standard:** the compiled library and all default targets are C++17 only.
+  The one exception is the opt-in C++20 coroutine layer: `include/halcyon/coro.hpp`
+  and `include/halcyon/coro/**` (header-only, never included by the umbrella),
+  plus the test/example targets gated on `HALCYON_HAS_CXX20_COROUTINES`.
+  Never add C++20 constructs anywhere else, and never `#if`-gate members of
+  existing classes on the language standard (ODR).
 - **Errors:** dual model. Recoverable paths return `Result<T>`; throwing overloads
   unwrap via `Result::value()` / `throw_error`. Never let `sqlcli1.h` error codes
   escape the seam un-translated — map SQLSTATE → `ErrorCode` in `detail::cli`.

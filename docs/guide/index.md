@@ -13,5 +13,6 @@ self-contained; follow them in order if you are new, or jump to any section.
 | [Transactions](transactions.md) | RAII `ScopedTransaction`, functional `transaction()`, retry semantics |
 | [Batch Operations](batch-operations.md) | `executeBatch`, `batchOf` for structs and raw tuples |
 | [Async](async.md) | `executeAsync`, `queryAsync`, lifetime rules |
+| [Coroutines (C++20)](coroutines.md) | `co_await`-able execute/query/transaction/streaming, `Task<T>`, threading contract |
 | [Observability](observability.md) | Prometheus metrics, OpenTelemetry tracing, full metric reference |
 | [Advanced](advanced.md) | Statement cache, custom `TypeBinder<T>`, driver injection for tests |

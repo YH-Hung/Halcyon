@@ -46,6 +46,7 @@ nav:
       - Batch Operations: guide/batch-operations.md
       - Large Objects (LOBs): guide/lobs.md
       - Async: guide/async.md
+      - Coroutines (C++20): guide/coroutines.md
       - Observability: guide/observability.md
       - Advanced: guide/advanced.md
   - API Reference: api/index.html
