@@ -4,6 +4,8 @@
 #include <chrono>
 #include <cstdint>
 #include <future>
+#include <memory>
+#include <mutex>
 #include <thread>
 #include <vector>
 
@@ -102,4 +104,88 @@ TEST(Executor, DestructionOffWorkerJoinsAndDrains) {
             ex.submit([&] { ++ran; });
     }  // dtor joins both workers
     EXPECT_EQ(ran.load(), 32);
+}
+
+TEST(Executor, PostRunsInFifoOrderWithSubmit) {
+    halcyon::Executor ex(1);
+    std::promise<void> gateEntered, gateRelease;
+    auto gateEnteredF = gateEntered.get_future();
+    auto gateReleaseF = gateRelease.get_future();
+    ex.submit([&] { gateEntered.set_value(); gateReleaseF.wait(); });
+    gateEnteredF.wait();  // worker parked: everything below queues in order
+
+    std::vector<int> order;
+    std::mutex om;
+    EXPECT_TRUE(ex.post([&]() noexcept {
+        std::lock_guard<std::mutex> lk(om);
+        order.push_back(1);
+    }));
+    auto f = ex.submit([&] {
+        std::lock_guard<std::mutex> lk(om);
+        order.push_back(2);
+    });
+    EXPECT_TRUE(ex.post([&]() noexcept {
+        std::lock_guard<std::mutex> lk(om);
+        order.push_back(3);
+    }));
+    gateRelease.set_value();
+    f.wait();  // 1 ran before 2; drain 3 by queueing a 4th and waiting on it
+    ex.submit([] {}).wait();
+    std::lock_guard<std::mutex> lk(om);
+    EXPECT_EQ(order, (std::vector<int>{1, 2, 3}));
+}
+
+TEST(Executor, OnWorkerThreadTrueOnlyOnWorkers) {
+    EXPECT_FALSE(halcyon::Executor::onWorkerThread());
+    halcyon::Executor ex(1);
+    auto f = ex.submit([] { return halcyon::Executor::onWorkerThread(); });
+    EXPECT_TRUE(f.get());
+    EXPECT_FALSE(halcyon::Executor::onWorkerThread());
+}
+
+// A live State does NOT imply posting is permitted: workers co-own the block
+// past stop. post must check stop under the State mutex and reject.
+TEST(Executor, PostAfterStopIsRejectedNotStranded) {
+    std::shared_ptr<halcyon::Executor::State> state;
+    {
+        halcyon::Executor ex(1);
+        state = ex.weakState().lock();
+        ASSERT_TRUE(state);
+    }  // dtor: stop set, worker joined; `state` (our strong ref) keeps the block alive
+    bool ran = false;
+    EXPECT_FALSE(state->post([&ran]() noexcept { ran = true; }));
+    EXPECT_FALSE(ran);
+}
+
+TEST(Executor, WeakStateExpiresAfterHandleAndWorkersExit) {
+    std::weak_ptr<halcyon::Executor::State> w;
+    {
+        halcyon::Executor ex(2);
+        w = ex.weakState();
+        EXPECT_FALSE(w.expired());
+    }
+    EXPECT_TRUE(w.expired());
+}
+
+// The lock-vs-destroy race: a strong State ref taken ON a worker while another
+// thread destroys the last handle must neither deadlock nor leak (run the
+// suite under ASan to prove the latter).
+TEST(Executor, StateLockedOnWorkerWhileHandleDestroyedElsewhere) {
+    auto ex = std::make_unique<halcyon::Executor>(1);
+    std::promise<void> locked, release;
+    auto lockedF = locked.get_future();
+    auto releaseF = release.get_future();
+    std::shared_ptr<halcyon::Executor::State> stateOnWorker;
+    auto w = ex->weakState();
+    ASSERT_TRUE(ex->post([&, w]() noexcept {
+        stateOnWorker = w.lock();  // strong State ref taken ON the worker
+        locked.set_value();
+        releaseF.wait();
+    }));
+    lockedF.wait();
+    std::thread killer([&] { ex.reset(); });  // dtor blocks joining the parked worker
+    release.set_value();                      // worker finishes; join completes
+    killer.join();
+    EXPECT_TRUE(stateOnWorker != nullptr);
+    stateOnWorker.reset();  // releasing the last-but-one ref controls no threads
 }
