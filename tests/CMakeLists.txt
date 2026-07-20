@@ -90,7 +90,8 @@ if(HALCYON_HAS_CXX20_COROUTINES)
     add_executable(halcyon_coro_tests
         unit/test_coro_task.cpp
         unit/test_coro_ops.cpp
-        unit/test_coro_transaction.cpp)
+        unit/test_coro_transaction.cpp
+        unit/test_coro_streaming.cpp)
     target_link_libraries(halcyon_coro_tests
         PRIVATE halcyon::halcyon GTest::gtest_main Threads::Threads)
     target_compile_features(halcyon_coro_tests PRIVATE cxx_std_20)
