@@ -188,6 +188,9 @@ public:
                 if (!idle_.empty()) {
                     detail::PoolSlot* s = idle_.front();
                     idle_.pop_front();
+                    // busy just increased; record the peak before any unlock
+                    // (validate-on-acquire drops mu_ for the isAlive probe).
+                    note_busy_peak_locked();
                     if (config_.validateOnAcquire) {
                         // Validates (reconnecting if dead) WITHOUT mu_ held; s is
                         // ours (popped) but stays in slots_ throughout.
@@ -347,11 +350,19 @@ private:
         pm.active = static_cast<double>(slots_.size()) - pm.idle;
     }
 
+    // Caller holds mu_. Updates the busy high-water mark from the current
+    // idle/size split. Must be called at every point busy increases (including
+    // BEFORE dropping mu_ for validate-on-acquire), so no concurrent snapshot
+    // can observe busy > peakBusy.
+    void note_busy_peak_locked() {
+        const std::size_t busy = slots_.size() - idle_.size();
+        if (busy > peakBusy_) peakBusy_ = busy;
+    }
+
     // Caller holds mu_. Records a successful lease-out for the stats counters.
     void note_acquired_locked() {
         ++acquiredTotal_;
-        const std::size_t busy = slots_.size() - idle_.size();
-        if (busy > peakBusy_) peakBusy_ = busy;
+        note_busy_peak_locked();
     }
 
     // Emits everything recorded in pm. MUST be called with mu_ NOT held.

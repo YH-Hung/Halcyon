@@ -170,6 +170,40 @@ TEST(PoolStats, ReapCountersSplitIdleAndLifetime) {
     EXPECT_GE(s2.createdTotal, s1.createdTotal + 1);
 }
 
+// v1.2 review P2: peakBusy is a high-water mark, so no snapshot may ever
+// report busy > peakBusy. During validate-on-acquire the slot leaves idle_
+// (busy++) and the pool mutex is dropped for the isAlive probe; peakBusy must
+// already reflect the increase by then. A concurrent snapshot taken inside
+// that gap catches a regression deterministically.
+TEST(PoolStats, PeakBusyNeverBelowBusyDuringValidation) {
+    MockCliDriver driver;
+    PoolConfig cfg = noThread();
+    cfg.min = 1;
+    cfg.max = 1;
+    cfg.validateOnAcquire = true;
+    auto pool = ConnectionPool::create(driver, {"X"}, cfg).value();
+    driver.aliveResults.push_back(true);  // validation succeeds (no reconnect)
+
+    std::promise<void> inValidate, releaseValidate;
+    auto inF = inValidate.get_future();
+    auto relF = releaseValidate.get_future();
+    driver.isAliveHook = [&] {
+        inValidate.set_value();
+        relF.wait();  // hold the acquirer inside the validation gap
+    };
+
+    auto fut = std::async(std::launch::async, [&] { return pool->acquire(); });
+    inF.wait();  // acquirer popped the slot (busy=1) and is inside isAlive
+    PoolStats s = pool->stats();
+    releaseValidate.set_value();
+    auto lease = fut.get();
+    ASSERT_TRUE(lease.ok());
+
+    expect_invariants(s);
+    EXPECT_EQ(s.busy, 1u);
+    EXPECT_GE(s.peakBusy, s.busy);  // the invariant the bug violates (was 0)
+}
+
 TEST(PoolStats, DatabaseForwarderMatchesPool) {
     MockCliDriver driver;
     auto db = Database::open(driver, "X", noThread()).value();

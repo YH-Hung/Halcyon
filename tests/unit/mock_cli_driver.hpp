@@ -94,7 +94,13 @@ public:
         return Result<void>();
     }
 
+    // Ordering/threading probe: invoked at the top of isAlive() so a test can
+    // observe pool state during the validate-on-acquire gap (mu_ is dropped
+    // across this call).
+    std::function<void()> isAliveHook;
+
     Result<bool> isAlive(ConnectionHandle handle) override {
+        if (isAliveHook) isAliveHook();
         ++aliveCalls;
         (void)handle;
         if (!aliveResults.empty()) {
