@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <cstddef>
@@ -44,6 +45,28 @@ struct PoolConfig {
     obs::ObservabilityConfig observability{};  // default-null = no-op
     std::size_t statementCacheSize = 64;       // per-connection prepared-stmt LRU; 0 disables
     std::optional<Isolation> isolation;        // session default; nullopt = server default (CS)
+};
+
+/// \brief Snapshot of pool health counters (v1.2), taken under a single lock
+/// acquisition by ConnectionPool::stats() / Database::poolStats(): within one
+/// snapshot `busy <= size` and `idle + busy == size` always hold.
+struct PoolStats {
+    // point-in-time
+    std::size_t size;  // connections currently owned (idle + busy)
+    std::size_t idle;
+    std::size_t busy;
+    std::size_t waiters;   // threads blocked in acquire()
+    std::size_t peakBusy;  // high-water mark since construction
+    // monotonic since pool construction
+    std::uint64_t createdTotal;
+    std::uint64_t acquiredTotal;
+    std::uint64_t acquireTimeoutsTotal;
+    std::uint64_t reapedIdleTotal;
+    std::uint64_t reapedLifetimeTotal;
+    std::uint64_t discardedTotal;  // poisoned + validation discards (a dead
+                                   // connection replaced by transparent
+                                   // reconnect counts: its predecessor was
+                                   // discarded)
 };
 
 namespace detail {
@@ -170,6 +193,7 @@ public:
                         // ours (popped) but stays in slots_ throughout.
                         auto v = ensure_alive(lk, s, pm);
                         if (!v.ok()) {
+                            ++discardedTotal_;  // validation-failed discard
                             remove_slot_locked(s);
                             snapshot_gauge_locked(pm);
                             cv_.notify_one();  // capacity freed → wake a waiter
@@ -177,6 +201,7 @@ public:
                         }
                     }
                     s->last_used_at = config_.now();
+                    note_acquired_locked();
                     snapshot_gauge_locked(pm);  // idle -> active
                     pm.acquireWait = true;
                     return PooledConnection(this, s);
@@ -196,11 +221,15 @@ public:
                         return c.error();
                     }
                     detail::PoolSlot* s = add_active_slot(std::move(c.value()));
+                    note_acquired_locked();
                     snapshot_gauge_locked(pm);  // final state: active (leased out)
                     pm.acquireWait = true;
                     return PooledConnection(this, s);
                 }
-                if (cv_.wait_until(lk, deadline) == std::cv_status::timeout &&
+                ++waiters_;
+                const auto waitStatus = cv_.wait_until(lk, deadline);
+                --waiters_;
+                if (waitStatus == std::cv_status::timeout &&
                     idle_.empty() && slots_.size() + pending_ >= config_.max) {
                     Error e;
                     e.code = ErrorCode::Pool;
@@ -208,6 +237,7 @@ public:
                     e.retriable = false;
                     pm.acquireWait = true;
                     pm.exhausted = true;
+                    ++acquireTimeoutsTotal_;
                     timed_out = true;
                     return e;
                 }
@@ -217,6 +247,25 @@ public:
         if (timed_out) span.setStatusError("");
         flush_metrics(pm);
         return result;
+    }
+
+    // One internally-consistent snapshot under the pool mutex (v1.2):
+    // busy <= size and idle + busy == size always hold within a snapshot.
+    PoolStats stats() const {
+        std::lock_guard<std::mutex> lk(mu_);
+        PoolStats s;
+        s.size = slots_.size();
+        s.idle = idle_.size();
+        s.busy = s.size - s.idle;
+        s.waiters = waiters_;
+        s.peakBusy = peakBusy_;
+        s.createdTotal = createdTotal_.load(std::memory_order_relaxed);
+        s.acquiredTotal = acquiredTotal_;
+        s.acquireTimeoutsTotal = acquireTimeoutsTotal_;
+        s.reapedIdleTotal = reapedIdleTotal_;
+        s.reapedLifetimeTotal = reapedLifetimeTotal_;
+        s.discardedTotal = discardedTotal_;
+        return s;
     }
 
     std::size_t total_count() const {
@@ -298,6 +347,13 @@ private:
         pm.active = static_cast<double>(slots_.size()) - pm.idle;
     }
 
+    // Caller holds mu_. Records a successful lease-out for the stats counters.
+    void note_acquired_locked() {
+        ++acquiredTotal_;
+        const std::size_t busy = slots_.size() - idle_.size();
+        if (busy > peakBusy_) peakBusy_ = busy;
+    }
+
     // Emits everything recorded in pm. MUST be called with mu_ NOT held.
     void flush_metrics(const PendingMetrics& pm) {
         if (has_metrics_) {
@@ -350,6 +406,7 @@ private:
                 if (logger_ != nullptr)
                     logger_->log(obs::LogLevel::Info, "connect.ok",
                                  {{"attempt", attempt}});
+                createdTotal_.fetch_add(1, std::memory_order_relaxed);
                 return std::make_unique<Connection>(std::move(c.value()));
             }
             last = c.error();
@@ -411,7 +468,8 @@ private:
         s->conn = std::move(c.value());
         s->created_at = config_.now();
         s->last_used_at = config_.now();
-        ++pm.reconnects;  // transparently reconnected in place
+        ++pm.reconnects;    // transparently reconnected in place
+        ++discardedTotal_;  // the dead original was discarded and replaced
         return Result<void>();
     }
 
@@ -430,6 +488,7 @@ private:
         {
             std::lock_guard<std::mutex> lk(mu_);
             if (broken || stopping_) {
+                if (broken) ++discardedTotal_;
                 remove_slot_locked(s);
             } else {
                 s->last_used_at = config_.now();
@@ -475,6 +534,17 @@ private:
     bool has_metrics_ = false;
     bool has_tracer_ = false;
     obs::ILogger* logger_ = nullptr;  // nullable; shared_ptr in config_ keeps it alive
+
+    // --- stats counters (v1.2). Guarded by mu_ EXCEPT createdTotal_, which is
+    // atomic because make_connection runs with mu_ deliberately dropped.
+    std::size_t waiters_ = 0;
+    std::size_t peakBusy_ = 0;
+    std::atomic<std::uint64_t> createdTotal_{0};
+    std::uint64_t acquiredTotal_ = 0;
+    std::uint64_t acquireTimeoutsTotal_ = 0;
+    std::uint64_t reapedIdleTotal_ = 0;
+    std::uint64_t reapedLifetimeTotal_ = 0;
+    std::uint64_t discardedTotal_ = 0;
 };
 
 inline void PooledConnection::release() {
@@ -496,6 +566,10 @@ inline void ConnectionPool::maintain() {
         const bool expired_idle = (now - s->last_used_at) >= config_.idleTimeout;
         const bool over_min = slots_.size() > config_.min;
         if (expired_life || (expired_idle && over_min)) {
+            if (expired_life)
+                ++reapedLifetimeTotal_;
+            else
+                ++reapedIdleTotal_;
             remove_slot_locked(s);  // Connection dtor disconnects
             ++pm.reaped;
         } else {

@@ -409,6 +409,9 @@ public:
 
     ConnectionPool& pool() noexcept { return *pool_; }
 
+    // Snapshot of pool health counters (v1.2); one lock acquisition.
+    PoolStats poolStats() const { return pool_->stats(); }
+
     // --- execute ---
     template <class... Args,
               std::enable_if_t<(is_bindable<Args>::value && ...), int> = 0>
