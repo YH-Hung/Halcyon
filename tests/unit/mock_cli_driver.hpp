@@ -63,6 +63,10 @@ public:
     // worker thread mid-call to make async/lifetime ordering deterministic.
     std::function<void()> executeHook;
 
+    // Lifetime probe: invoked at the top of every disconnect() so a test can
+    // count pool teardown without holding its own strong driver reference.
+    std::function<void()> disconnectHook;
+
     // Optional gate invoked at the top of every connect(); lets a test block a
     // worker thread mid-connect to assert the pool mutex is not held meanwhile.
     std::function<void()> connectHook;
@@ -84,6 +88,7 @@ public:
     }
 
     Result<void> disconnect(ConnectionHandle handle) override {
+        if (disconnectHook) disconnectHook();
         ++disconnectCalls;
         (void)handle;
         return Result<void>();

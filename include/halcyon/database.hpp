@@ -58,6 +58,20 @@ struct AsyncCallBacking {
     std::shared_ptr<ConnectionPool> pool;
 };
 
+// A ready future carrying InvalidState: returned by async entry points on a
+// pool-only Database view (Database::AsyncBacking::syncView), which has no
+// executor by design.
+template <class R>
+std::future<R> ready_invalid_state_future() {
+    Error e;
+    e.code = ErrorCode::InvalidState;
+    e.message = "async entry points are unavailable on a pool-only Database "
+                "view (use the owning Database, or halcyon::coro)";
+    std::promise<R> p;
+    p.set_value(R(std::move(e)));
+    return p.get_future();
+}
+
 }  // namespace detail
 
 // `Batch` is defined in parameters.hpp so the executeBatch(Batch) overload is
@@ -595,6 +609,8 @@ public:
     template <class... Args>
     std::future<Result<std::int64_t>> executeAsync(const std::string& sql,
                                                    Args... args) {
+        if (!exec_)
+            return detail::ready_invalid_state_future<Result<std::int64_t>>();
         auto parent = has_tracer_ ? tracer_->captureContext()
                                   : std::shared_ptr<obs::SpanContext>{};
         return exec_->submit(
@@ -620,6 +636,8 @@ public:
     template <class T, class... Args>
     std::future<Result<std::vector<T>>> queryAsync(const std::string& sql,
                                                    Args... args) {
+        if (!exec_)
+            return detail::ready_invalid_state_future<Result<std::vector<T>>>();
         auto parent = has_tracer_ ? tracer_->captureContext()
                                   : std::shared_ptr<obs::SpanContext>{};
         return exec_->submit(
@@ -653,6 +671,16 @@ public:
             has_tracer_ ? tracer_->attachContext(std::move(ctx))
                         : std::unique_ptr<obs::ContextToken>{});
     }
+
+    // --- coroutine-layer backing (C++17 support surface; see halcyon/coro.hpp) ---
+
+    /// \brief Movable bundle bridging a coro factory's call site to await
+    /// time. Defined AFTER the class: it holds a Database by value, which is
+    /// an incomplete type inside Database's own definition.
+    struct AsyncBacking;
+
+    // Defined after AsyncBacking (the return type must be complete there).
+    AsyncBacking asyncBacking() const;
 
 private:
     Database(std::shared_ptr<detail::cli::ICliDriver> owned_driver,
@@ -902,6 +930,35 @@ private:
     bool has_metrics_ = false;
     bool has_tracer_ = false;
 };
+
+/// \brief Movable bundle bridging a coro factory's call site to await time.
+///
+/// Obtained synchronously via Database::asyncBacking(). The OTel trace
+/// context is snapshotted there and ONLY there — the same call-point capture
+/// the future-based async path performs — and is reattached on the worker via
+/// useParentContext.
+struct Database::AsyncBacking {
+    // Pool-only sync view: serves the full synchronous API (retry,
+    // instrument, metrics, logging) against the shared pool and holds the
+    // owned-driver keep-alive (Database's member order, driver before pool,
+    // destroys pool first). Its async entry points return
+    // ErrorCode::InvalidState.
+    Database syncView;
+    // Weak on purpose: a coroutine frame must never keep executor workers
+    // alive, or become the final release of the handle on a worker. Lock at
+    // await time; a failed lock or rejected post = InvalidState.
+    std::weak_ptr<Executor::State> exec;
+    // Captured at the factory call; attached on the worker.
+    std::shared_ptr<obs::SpanContext> traceContext;
+};
+
+inline Database::AsyncBacking Database::asyncBacking() const {
+    return AsyncBacking{
+        Database(owned_driver_, pool_, nullptr),
+        exec_ ? exec_->weakState() : std::weak_ptr<Executor::State>{},
+        has_tracer_ ? tracer_->captureContext()
+                    : std::shared_ptr<obs::SpanContext>{}};
+}
 
 // --- Functional free-function API (delegates to Database) ---
 
