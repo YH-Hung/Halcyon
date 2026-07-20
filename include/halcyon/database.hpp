@@ -46,6 +46,18 @@ void batch_append_tuple(std::vector<detail::cli::Value>& row, const Tuple& t,
     (row.push_back(detail::to_value(std::get<I>(t))), ...);
 }
 
+// Keep-alive bundle captured by every queued async job (executeAsync/
+// queryAsync): with self-safe executor teardown (detach-on-worker, v1.2),
+// queued work can outlive ~Database, so each job carries its own backing.
+// The owned driver is declared BEFORE the pool so the pool is destroyed
+// first — ConnectionPool holds a raw ICliDriver* (the same keep-alive
+// ordering QueryResult documents). A struct, not two lambda captures,
+// because lambda-capture destruction order is unspecified.
+struct AsyncCallBacking {
+    std::shared_ptr<cli::ICliDriver> driver;  // null when caller-owned
+    std::shared_ptr<ConnectionPool> pool;
+};
+
 }  // namespace detail
 
 // `Batch` is defined in parameters.hpp so the executeBatch(Batch) overload is
@@ -574,28 +586,30 @@ public:
     }
 
     // --- async (std::future, backed by a shared Executor) ---
-    // The task captures the shared pool (a shared_ptr that keeps the backing
-    // alive), never `this`: a Database is a copyable handle, so the specific
+    // The task captures an AsyncCallBacking (owned driver + pool, in keep-alive
+    // order), never `this`: a Database is a copyable handle, so the specific
     // copy that launched the task may be destroyed while another copy keeps the
-    // shared executor running. The shared Executor (held by every copy) drains
-    // in-flight tasks on the last copy's destruction, so the captured pool stays
-    // valid for the task's whole lifetime.
+    // shared executor running — and with self-safe teardown (v1.2) a queued job
+    // can even outlive the LAST copy, so each job is self-sufficient no matter
+    // when it drains.
     template <class... Args>
     std::future<Result<std::int64_t>> executeAsync(const std::string& sql,
                                                    Args... args) {
         auto parent = has_tracer_ ? tracer_->captureContext()
                                   : std::shared_ptr<obs::SpanContext>{};
         return exec_->submit(
-            [pool = pool_, attempts = default_attempts_,
+            [backing = detail::AsyncCallBacking{owned_driver_, pool_},
+             attempts = default_attempts_,
              parent = std::move(parent), sql, args...]() {
+                auto& pool = *backing.pool;
                 return instrument(
-                    pool->metrics(), pool->tracer(), pool->metrics_enabled(),
-                    pool->tracer_enabled(), "halcyon.execute", sql,
+                    pool.metrics(), pool.tracer(), pool.metrics_enabled(),
+                    pool.tracer_enabled(), "halcyon.execute", sql,
                     [&] {
                         return run_with_policy_on(
-                            *pool, default_policy_for(*pool, attempts, sql),
+                            pool, default_policy_for(pool, attempts, sql),
                             [&](Connection& c) { return c.execute(sql, args...); },
-                            pool->metrics(), pool->metrics_enabled());
+                            pool.metrics(), pool.metrics_enabled());
                     },
                     parent.get());
             });
@@ -609,18 +623,20 @@ public:
         auto parent = has_tracer_ ? tracer_->captureContext()
                                   : std::shared_ptr<obs::SpanContext>{};
         return exec_->submit(
-            [pool = pool_, attempts = default_attempts_,
+            [backing = detail::AsyncCallBacking{owned_driver_, pool_},
+             attempts = default_attempts_,
              parent = std::move(parent), sql, args...]() {
+                auto& pool = *backing.pool;
                 return instrument(
-                    pool->metrics(), pool->tracer(), pool->metrics_enabled(),
-                    pool->tracer_enabled(), "halcyon.query", sql,
+                    pool.metrics(), pool.tracer(), pool.metrics_enabled(),
+                    pool.tracer_enabled(), "halcyon.query", sql,
                     [&] {
                         return run_with_policy_on(
-                            *pool, default_policy_for(*pool, attempts, sql),
+                            pool, default_policy_for(pool, attempts, sql),
                             [&](Connection& c) {
                                 return c.template queryAs<T>(sql, args...);
                             },
-                            pool->metrics(), pool->metrics_enabled());
+                            pool.metrics(), pool.metrics_enabled());
                     },
                     parent.get());
             });
