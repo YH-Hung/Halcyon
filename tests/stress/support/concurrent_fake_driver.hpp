@@ -214,18 +214,50 @@ public:
         return out;
     }
 
-    // --- Streaming data path (v1.1): not exercised by the stress suite ---
-    Result<bool> fetchNext(StatementHandle) override {
-        return Result<bool>(false);
+    // --- Streaming data path (v1.1): row-at-a-time over the same derived
+    // one-row cursor the block path serves. getDataChunk serves a fixed
+    // 256-byte derived pattern so streaming LOB reads are exercised under
+    // load. executeStreaming (LOB writes) stays unsupported here.
+    static constexpr std::size_t kStreamLobBytes = 256;
+
+    Result<bool> fetchNext(StatementHandle stmt) override {
+        std::lock_guard<std::mutex> lk(mu_);
+        auto it = stmts_.find(stmt);
+        if (it == stmts_.end() || !live_.count(it->second.conn))
+            return stale<bool>();
+        if (it->second.position >= 0) return Result<bool>(false);  // one row
+        it->second.position = 0;
+        it->second.lobOffset = 0;
+        return Result<bool>(true);
     }
-    Result<Value> getValue(StatementHandle, std::size_t) override {
-        return Result<Value>(unsupported("getValue"));
+
+    Result<Value> getValue(StatementHandle stmt, std::size_t) override {
+        std::lock_guard<std::mutex> lk(mu_);
+        auto it = stmts_.find(stmt);
+        if (it == stmts_.end() || it->second.position < 0)
+            return Result<Value>(unsupported("getValue before fetchNext"));
+        return Result<Value>(Value{encoded_value(it->second.sql)});
     }
-    Result<detail::cli::GetDataChunk> getDataChunk(StatementHandle, std::size_t,
-                                                   std::byte*,
-                                                   std::size_t) override {
-        return Result<detail::cli::GetDataChunk>(unsupported("getDataChunk"));
+
+    Result<detail::cli::GetDataChunk> getDataChunk(
+        StatementHandle stmt, std::size_t, std::byte* buf,
+        std::size_t bufLen) override {
+        std::lock_guard<std::mutex> lk(mu_);
+        auto it = stmts_.find(stmt);
+        if (it == stmts_.end() || it->second.position < 0)
+            return Result<detail::cli::GetDataChunk>(
+                unsupported("getDataChunk before fetchNext"));
+        detail::cli::GetDataChunk out;
+        std::size_t& off = it->second.lobOffset;
+        const std::size_t n = std::min(bufLen, kStreamLobBytes - off);
+        for (std::size_t i = 0; i < n; ++i)
+            buf[i] = static_cast<std::byte>((off + i) & 0xFF);
+        off += n;
+        out.bytes = n;
+        out.done = (off == kStreamLobBytes);
+        return Result<detail::cli::GetDataChunk>(out);
     }
+
     Result<std::int64_t> executeStreaming(
         StatementHandle, const std::vector<Value>&,
         std::vector<detail::cli::ParamStreamSource>) override {
@@ -245,6 +277,7 @@ private:
         ConnectionHandle conn;
         std::string sql;
         long position;
+        std::size_t lobOffset = 0;  // per-statement streaming-read progress
     };
     struct InFlightGuard {
         ConcurrentFakeDriver* d;

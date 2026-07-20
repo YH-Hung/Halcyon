@@ -44,3 +44,16 @@ add_executable(halcyon_select_bench perf/select_bench.cpp)
 target_link_libraries(halcyon_select_bench PRIVATE halcyon::halcyon)
 target_compile_options(halcyon_select_bench PRIVATE -Wall -Wextra)
 halcyon_apply_sanitizer(halcyon_select_bench)
+
+# ---- Front-end #5: C++20 coroutine-layer stress (skipped without support) ----
+if(HALCYON_HAS_CXX20_COROUTINES)
+    add_executable(halcyon_stress_coro_tests correctness/test_stress_coro.cpp)
+    target_link_libraries(halcyon_stress_coro_tests
+        PRIVATE halcyon::halcyon GTest::gtest_main Threads::Threads)
+    target_compile_features(halcyon_stress_coro_tests PRIVATE cxx_std_20)
+    target_include_directories(halcyon_stress_coro_tests
+        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
+    target_compile_options(halcyon_stress_coro_tests PRIVATE -Wall -Wextra)
+    halcyon_apply_sanitizer(halcyon_stress_coro_tests)
+    gtest_discover_tests(halcyon_stress_coro_tests PROPERTIES LABELS "stress")
+endif()
