@@ -5,8 +5,10 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <variant>
 #include <vector>
 
+#include "halcyon/parameters.hpp"
 #include "halcyon/types.hpp"
 
 using halcyon::ErrorCode;
@@ -175,4 +177,25 @@ TEST(TypeBinder, ChronoParsesDb2DashSeparatedForm) {
 TEST(TypeBinder, ChronoNullAndMismatchAreMappingErrors) {
     EXPECT_FALSE(TypeBinder<TimePoint>::from_value(Value{Null{}}).ok());
     EXPECT_FALSE(TypeBinder<TimePoint>::from_value(Value{std::int64_t{5}}).ok());
+}
+
+// v1.2: an already-materialized seam Value binds through the normal variadic
+// paths unchanged (identity). Bind-only: reads stay typed.
+TEST(TypeBinder, SeamValuePassthroughBindsIdentity) {
+    using halcyon::detail::cli::Value;
+    static_assert(halcyon::is_bindable<Value>::value,
+                  "seam Value must be bindable (v1.2 passthrough)");
+    Value s{std::string{"owned"}};
+    auto vs = halcyon::detail::to_value(s);
+    EXPECT_EQ(std::get<std::string>(vs), "owned");
+
+    Value n{halcyon::detail::cli::Null{}};
+    auto vn = halcyon::detail::to_value(n);
+    EXPECT_TRUE(std::holds_alternative<halcyon::detail::cli::Null>(vn));
+
+    auto packed = halcyon::detail::pack_params(Value{std::int64_t{42}},
+                                               std::string{"mixed"});
+    ASSERT_EQ(packed.size(), 2u);
+    EXPECT_EQ(std::get<std::int64_t>(packed[0]), 42);
+    EXPECT_EQ(std::get<std::string>(packed[1]), "mixed");
 }

@@ -125,6 +125,16 @@ struct TypeBinder<std::vector<std::byte>> {
     }
 };
 
+// --- seam Value passthrough (bind-only, v1.2) ---
+// Lets an already-materialized detail::cli::Value be passed wherever a
+// bindable parameter is accepted (identity). The coroutine layer's factories
+// materialize arguments into owned Values at the call site and re-bind them
+// later through this passthrough. Bind-only: read typed values instead.
+template <>
+struct TypeBinder<detail::cli::Value> {
+    static detail::cli::Value to_value(detail::cli::Value v) { return v; }
+};
+
 // --- bind-only std::string_view ---
 template <>
 struct TypeBinder<std::string_view> {
