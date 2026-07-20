@@ -135,6 +135,56 @@ auto own_arg(T&& v) {
     }
 }
 
+// Re-submits the coroutine onto a Halcyon worker (spec §A.4 hop-back). The
+// co_await yields true when resumed on a worker; false — with NO suspension,
+// still on the current thread — when the executor is gone or stopping, so the
+// caller can handle terminal work synchronously. Takes the whole bundle (not
+// just the weak State) so the resume runs under the captured trace context —
+// user code continuing after the transaction may call the next factory on
+// this worker and should observe the original context. Attachment is
+// best-effort (spec §7 carve-out): if the adapter throws, the resume is
+// simply un-contexted.
+class HopToWorker {
+public:
+    explicit HopToWorker(Database::AsyncBacking& backing) noexcept
+        : backing_(&backing) {}
+    bool await_ready() const noexcept { return false; }
+    bool await_suspend(std::coroutine_handle<> h) {
+        auto state = backing_->exec.lock();
+        if (!state) {
+            hopped_ = false;
+            return false;
+        }
+        const bool posted = state->post([b = backing_, h]() noexcept {
+            // Guard is closure-local (never frame state): destroying it after
+            // resume() is safe even if the frame is gone by then. Attachment
+            // is BEST-EFFORT here — a contractual carve-out from the
+            // rethrow-at-co_await rule (spec §7): the hop exists so
+            // commit/rollback run on a worker, aborting the terminal step
+            // over a tracing failure would be backwards, and rethrowing here
+            // would mask a pending user exception (the hop runs after fn).
+            // A throwing attachContext degrades to an un-contexted resume.
+            obs::ScopedContext guard;
+            try {
+                guard = b->syncView.useParentContext(b->traceContext);
+            } catch (...) {
+                // tracing degraded; transaction correctness unaffected
+            }
+            h.resume();  // terminal commit/rollback + continuation
+        });
+        if (!posted) {
+            hopped_ = false;
+            return false;
+        }
+        return true;  // resumed on a worker; hopped_ stays true
+    }
+    bool await_resume() const noexcept { return hopped_; }
+
+private:
+    Database::AsyncBacking* backing_;
+    bool hopped_ = true;
+};
+
 }  // namespace halcyon::coro::detail
 
 #endif  // HALCYON_HAS_CORO_SUPPORT

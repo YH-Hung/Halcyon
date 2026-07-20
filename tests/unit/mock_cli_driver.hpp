@@ -235,6 +235,10 @@ public:
     std::function<void()> onCloseCursor;
     std::function<void()> onRollback;
 
+    // Ordering/threading probe: invoked at the top of commit() so a test can
+    // record which thread commits (e.g. the coro transaction hop-back).
+    std::function<void()> commitHook;
+
     // --- transaction scripting (Plan 4) ---
     std::deque<Error> txnErrors;  // next setAutoCommit/commit/rollback fails
     std::vector<bool> autoCommitCalls;
@@ -247,6 +251,7 @@ public:
         return next_txn_result();
     }
     Result<void> commit(ConnectionHandle handle) override {
+        if (commitHook) commitHook();
         (void)handle;
         ++commitCalls;
         return next_txn_result();
