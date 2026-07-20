@@ -7,6 +7,39 @@ public C++ API (see "Versioning & compatibility" in the README).
 
 ## Unreleased
 
+## 1.2.0 - 2026-07-20
+
+Coroutines & async streaming. The compiled library still targets C++17;
+`halcyon/coro.hpp` is a C++20 opt-in header outside the `halcyon.hpp`
+umbrella (toolchain floor for it: GCC 11+, Clang 14+, AppleClang 14+).
+
+### Added
+- C++20 coroutine layer (`halcyon/coro.hpp`, namespace `halcyon::coro`):
+  dependency-free lazy `Task<T>` (move-only, symmetric transfer); awaitable
+  `execute`, `query<T>`, `executeBatch`, and `transaction` (plain callable or
+  `Task`-returning coroutine — commit/rollback always hop back to Halcyon
+  workers); async streaming via `queryStreaming` → `StreamingQuery` with
+  awaitable `next()` and chunked `LobReader` reads/drains; `syncWait` bridge.
+  Executor-offload design: every op runs the existing instrumented sync path,
+  so auto-retry, reconnect, metrics, tracing, and logging apply unchanged
+  (one documented exception: a `Task`-returning transaction callback does not
+  emit the `halcyon.transaction` span — see the coroutines guide).
+- C++17 support surface: `Database::asyncBacking()` (pool-only sync view,
+  weak executor state, call-site trace capture), stop-aware fire-and-forget
+  `Executor::post`, `Executor::onWorkerThread()`, and a bind-only
+  `TypeBinder` passthrough for seam `Value`s.
+- Pool health stats: `PoolStats` snapshot via `ConnectionPool::stats()` /
+  `Database::poolStats()` — internally consistent under a single lock.
+- New guide `docs/guide/coroutines.md`; `examples/coro_orders.cpp`.
+
+### Changed
+- `Executor` teardown is now safe on its own worker threads (handle/state
+  split: join-others, detach-self). `executeAsync`/`queryAsync` jobs each
+  carry their own driver+pool keep-alive backing so queued work stays safe
+  across teardown. Behavior-compatible.
+- `docs/guide/async.md` no longer claims streaming cursors cannot cross
+  threads; the documented contract is coordinated, never-concurrent use.
+
 ## 1.1.0 - 2026-07-13
 
 Transactions & large data. Published as
