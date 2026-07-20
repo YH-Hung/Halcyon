@@ -6,6 +6,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -243,4 +244,101 @@ TEST(AsyncBacking, CapturesTraceContextAtCallTime) {
     auto guard = b.syncView.useParentContext(b.traceContext);
     ASSERT_EQ(tracer->attached.size(), 1u);
     EXPECT_EQ(tracer->attached[0], tracer->toCapture.get());
+}
+
+// v1.2 review P1: the future async APIs must materialize owning storage for
+// their arguments at the CALL site. A std::string_view whose buffer is freed
+// before the queued job runs would otherwise be captured as a borrowed view
+// and dereferenced on the worker — a use-after-free (ASan-verified). One
+// worker + a gate makes the queue order deterministic.
+TEST(DatabaseAsync, ExecuteAsyncOwnsTransientStringViewArg) {
+    MockCliDriver driver;
+    driver.execRowCounts.push_back(0);  // gate job
+    driver.execRowCounts.push_back(1);  // job under test
+    std::promise<void> entered, release;
+    auto enteredF = entered.get_future();
+    auto releaseF = release.get_future();
+    int calls = 0;
+    driver.executeHook = [&] {
+        if (calls++ == 0) {
+            entered.set_value();
+            releaseF.wait();
+        }
+    };
+    PoolConfig cfg = noThread();
+    cfg.max = 1;  // single worker -> deterministic queue order
+    auto db = Database::open(driver, "X", cfg).value();
+
+    auto gate = db.executeAsync("GATE", 0);
+    enteredF.wait();  // worker parked inside the gate job
+
+    std::future<halcyon::Result<std::int64_t>> f;
+    {
+        auto buf = std::make_unique<std::string>("transient-async-value");
+        std::string_view sv(*buf);
+        f = db.executeAsync("INSERT INTO t(name) VALUES (?)", sv);
+    }  // buffer freed HERE, before the job runs
+    release.set_value();
+
+    ASSERT_TRUE(gate.get().ok());
+    auto r = f.get();
+    ASSERT_TRUE(r.ok()) << r.error().message;
+    bool found = false;
+    for (auto& kv : driver.statements) {
+        if (kv.second.sql.rfind("INSERT", 0) == 0) {
+            ASSERT_EQ(kv.second.boundParams.size(), 1u);
+            EXPECT_EQ(std::get<std::string>(kv.second.boundParams[0]),
+                      "transient-async-value");
+            found = true;
+        }
+    }
+    EXPECT_TRUE(found);
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+}
+
+// Same materialization requirement for the typed read path.
+TEST(DatabaseAsync, QueryAsyncOwnsTransientStringViewArg) {
+    MockCliDriver driver;
+    driver.execRowCounts.push_back(0);  // gate job
+    driver.resultSets.push_back(MockCliDriver::ScriptedRows{
+        {"n"}, {{halcyon::detail::cli::Value{std::int64_t{1}}}}});
+    std::promise<void> entered, release;
+    auto enteredF = entered.get_future();
+    auto releaseF = release.get_future();
+    int calls = 0;
+    driver.executeHook = [&] {
+        if (calls++ == 0) {
+            entered.set_value();
+            releaseF.wait();
+        }
+    };
+    PoolConfig cfg = noThread();
+    cfg.max = 1;
+    auto db = Database::open(driver, "X", cfg).value();
+
+    auto gate = db.executeAsync("GATE", 0);
+    enteredF.wait();
+
+    std::future<halcyon::Result<std::vector<Num>>> f;
+    {
+        auto buf = std::make_unique<std::string>("transient-read-arg");
+        std::string_view sv(*buf);
+        f = db.queryAsync<Num>("SELECT n FROM t WHERE name = ?", sv);
+    }  // buffer freed before the job runs
+    release.set_value();
+
+    ASSERT_TRUE(gate.get().ok());
+    auto r = f.get();
+    ASSERT_TRUE(r.ok()) << r.error().message;
+    bool found = false;
+    for (auto& kv : driver.statements) {
+        if (kv.second.sql.rfind("SELECT", 0) == 0 &&
+            !kv.second.boundParams.empty()) {
+            EXPECT_EQ(std::get<std::string>(kv.second.boundParams[0]),
+                      "transient-read-arg");
+            found = true;
+        }
+    }
+    EXPECT_TRUE(found);
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
 }

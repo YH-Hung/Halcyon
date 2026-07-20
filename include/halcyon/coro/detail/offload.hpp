@@ -124,15 +124,12 @@ auto offload(Database::AsyncBacking& backing, Op op) {
 // seam Values now (string_view / const char* are copied into owning storage —
 // a decay-copy alone would still be a view); a LobSource WRAPPER is moved into
 // the frame as-is (only its referents — lobStream's stream, lobCallback
-// reference captures — are borrowed and must outlive the task).
+// reference captures — are borrowed and must outlive the task). Forwards to
+// the C++17 halcyon::detail::own_arg so the future and coroutine async
+// surfaces share one materialization rule.
 template <class T>
 auto own_arg(T&& v) {
-    using D = std::decay_t<T>;
-    if constexpr (is_lob_source<D>::value) {
-        return D(std::forward<T>(v));
-    } else {
-        return halcyon::detail::to_value(v);
-    }
+    return halcyon::detail::own_arg(std::forward<T>(v));
 }
 
 // Re-submits the coroutine onto a Halcyon worker (spec §A.4 hop-back). The

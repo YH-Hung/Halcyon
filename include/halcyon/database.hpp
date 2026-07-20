@@ -58,6 +58,22 @@ struct AsyncCallBacking {
     std::shared_ptr<ConnectionPool> pool;
 };
 
+// Materialize one async argument into owning storage at the CALL site: an
+// ordinary parameter (including string_view / const char*) becomes an owned
+// seam Value NOW, so a queued job never dereferences a borrowed buffer that
+// died before it ran; a LobSource WRAPPER is moved as-is (only its referents
+// are borrowed, by documented contract). The C++20 coroutine layer's own_arg
+// forwards here so both async surfaces share one rule.
+template <class T>
+auto own_arg(T&& v) {
+    using D = std::decay_t<T>;
+    if constexpr (is_lob_source<D>::value) {
+        return D(std::forward<T>(v));
+    } else {
+        return to_value(v);
+    }
+}
+
 // A ready future carrying InvalidState: returned by async entry points on a
 // pool-only Database view (Database::AsyncBacking::syncView), which has no
 // executor by design.
@@ -616,10 +632,14 @@ public:
             return detail::ready_invalid_state_future<Result<std::int64_t>>();
         auto parent = has_tracer_ ? tracer_->captureContext()
                                   : std::shared_ptr<obs::SpanContext>{};
+        // Materialize args into owning storage NOW: a captured string_view /
+        // const char* would dangle if its buffer died before the queued job
+        // ran (the job may drain long after this call returns).
+        auto owned = std::make_tuple(detail::own_arg(std::move(args))...);
         return exec_->submit(
             [backing = detail::AsyncCallBacking{owned_driver_, pool_},
-             attempts = default_attempts_,
-             parent = std::move(parent), sql, args...]() {
+             attempts = default_attempts_, parent = std::move(parent), sql,
+             owned = std::move(owned)]() {
                 auto& pool = *backing.pool;
                 return instrument(
                     pool.metrics(), pool.tracer(), pool.metrics_enabled(),
@@ -627,7 +647,13 @@ public:
                     [&] {
                         return run_with_policy_on(
                             pool, default_policy_for(pool, attempts, sql),
-                            [&](Connection& c) { return c.execute(sql, args...); },
+                            [&](Connection& c) {
+                                return std::apply(
+                                    [&](const auto&... vs) {
+                                        return c.execute(sql, vs...);
+                                    },
+                                    owned);
+                            },
                             pool.metrics(), pool.metrics_enabled());
                     },
                     parent.get());
@@ -643,10 +669,13 @@ public:
             return detail::ready_invalid_state_future<Result<std::vector<T>>>();
         auto parent = has_tracer_ ? tracer_->captureContext()
                                   : std::shared_ptr<obs::SpanContext>{};
+        // See executeAsync: own the args at the call site so queued reads never
+        // bind a dangling view.
+        auto owned = std::make_tuple(detail::own_arg(std::move(args))...);
         return exec_->submit(
             [backing = detail::AsyncCallBacking{owned_driver_, pool_},
-             attempts = default_attempts_,
-             parent = std::move(parent), sql, args...]() {
+             attempts = default_attempts_, parent = std::move(parent), sql,
+             owned = std::move(owned)]() {
                 auto& pool = *backing.pool;
                 return instrument(
                     pool.metrics(), pool.tracer(), pool.metrics_enabled(),
@@ -655,7 +684,11 @@ public:
                         return run_with_policy_on(
                             pool, default_policy_for(pool, attempts, sql),
                             [&](Connection& c) {
-                                return c.template queryAs<T>(sql, args...);
+                                return std::apply(
+                                    [&](const auto&... vs) {
+                                        return c.template queryAs<T>(sql, vs...);
+                                    },
+                                    owned);
                             },
                             pool.metrics(), pool.metrics_enabled());
                     },
