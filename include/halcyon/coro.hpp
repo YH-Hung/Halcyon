@@ -14,4 +14,5 @@
 ///    time across awaits (sequential, never concurrent — awaits provide the
 ///    happens-before edges IBM CLI requires for cross-thread handle use).
 #include "halcyon/coro/detail/require_coroutines.hpp"
+#include "halcyon/coro/ops.hpp"
 #include "halcyon/coro/task.hpp"

@@ -115,7 +115,7 @@ public:
         }
         preparedSql.push_back(sql);
         auto h = static_cast<StatementHandle>(++nextStmt_);
-        statements[h] = StmtState{sql, {}, {}, -1};
+        statements[h] = StmtState{sql, {}, {}, -1, {}};
         return Result<StatementHandle>(h);
     }
 
