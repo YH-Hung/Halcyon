@@ -17,31 +17,61 @@
 
 namespace halcyon {
 
-/// \brief Fixed-size thread pool backing `Database::executeAsync` / `queryAsync`.
+/// \brief Fixed-size thread pool backing `Database::executeAsync` / `queryAsync`
+/// and the C++20 coroutine layer (halcyon/coro.hpp).
 ///
 /// Submit any callable via `submit(fn)` — returns a `std::future<ReturnType>`.
-/// A future coroutine `task<T>`/awaitable layer can wrap `submit()` without
-/// changing this API. Drains in-flight tasks on destruction.
+/// Drains in-flight tasks on destruction. Teardown is safe on ANY thread,
+/// including this executor's own workers: the destructor joins every worker
+/// except the current thread and detaches itself when it *is* a worker.
 class Executor {
 public:
-    explicit Executor(std::size_t threads) {
+    // Internal shared block co-owned by this handle and by every worker thread
+    // (each worker holds a shared_ptr for its whole lifetime, so the loop's
+    // post-destructor member access is always backed memory). The coroutine
+    // layer references the executor ONLY through a weak_ptr to this block:
+    // releasing a strong State reference controls no thread lifetimes, so it
+    // is safe on any thread at any time. Public for the coro layer; not part
+    // of the supported user API.
+    struct State {
+        std::mutex mu;
+        std::condition_variable cv;
+        std::queue<std::function<void()>> tasks;
+        bool stop = false;
+    };
+
+    explicit Executor(std::size_t threads) : state_(std::make_shared<State>()) {
         if (threads == 0) threads = 1;
         workers_.reserve(threads);
         for (std::size_t i = 0; i < threads; ++i)
-            workers_.emplace_back([this] { worker_loop(); });
+            workers_.emplace_back([s = state_]() mutable {
+                worker_loop(std::move(s));
+            });
     }
 
     Executor(const Executor&) = delete;
     Executor& operator=(const Executor&) = delete;
 
+    // Safe on any thread, including this executor's own workers (a user
+    // continuation resumed on a worker can destroy the last Database copy and,
+    // with it, this handle). A self-join would deadlock; instead the current
+    // thread is detached and keeps draining over the co-owned State after this
+    // destructor returns. Joined workers exit only at stop-and-empty-queue, so
+    // every job enqueued before stop is drained either way.
     ~Executor() {
         {
-            std::lock_guard<std::mutex> lk(mu_);
-            stop_ = true;
+            std::lock_guard<std::mutex> lk(state_->mu);
+            state_->stop = true;
         }
-        cv_.notify_all();
-        for (auto& t : workers_)
-            if (t.joinable()) t.join();
+        state_->cv.notify_all();
+        const auto self = std::this_thread::get_id();
+        for (auto& t : workers_) {
+            if (!t.joinable()) continue;
+            if (t.get_id() == self)
+                t.detach();  // teardown on a worker: never self-join
+            else
+                t.join();
+        }
     }
 
     template <class Fn>
@@ -50,36 +80,35 @@ public:
         auto task = std::make_shared<std::packaged_task<R()>>(std::forward<Fn>(fn));
         std::future<R> fut = task->get_future();
         {
-            std::lock_guard<std::mutex> lk(mu_);
-            tasks_.emplace([task] { (*task)(); });
+            std::lock_guard<std::mutex> lk(state_->mu);
+            state_->tasks.emplace([task] { (*task)(); });
         }
-        cv_.notify_one();
+        state_->cv.notify_one();
         return fut;
     }
 
 private:
-    void worker_loop() {
+    // Static and shared_ptr-parameterized: after ~Executor detaches this
+    // thread, the loop touches only the co-owned State, never the freed handle.
+    static void worker_loop(std::shared_ptr<State> s) {
         for (;;) {
             std::function<void()> job;
             {
-                std::unique_lock<std::mutex> lk(mu_);
-                cv_.wait(lk, [this] { return stop_ || !tasks_.empty(); });
-                if (tasks_.empty()) {
-                    if (stop_) return;
+                std::unique_lock<std::mutex> lk(s->mu);
+                s->cv.wait(lk, [&] { return s->stop || !s->tasks.empty(); });
+                if (s->tasks.empty()) {
+                    if (s->stop) return;  // stop observed with an empty queue
                     continue;
                 }
-                job = std::move(tasks_.front());
-                tasks_.pop();
+                job = std::move(s->tasks.front());
+                s->tasks.pop();
             }
             job();
         }
     }
 
+    std::shared_ptr<State> state_;
     std::vector<std::thread> workers_;
-    std::queue<std::function<void()>> tasks_;
-    std::mutex mu_;
-    std::condition_variable cv_;
-    bool stop_ = false;
 };
 
 /// \brief Async helper: acquires a pooled connection on a worker thread and runs `fn(Connection&)`.

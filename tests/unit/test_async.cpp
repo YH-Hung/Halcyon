@@ -1,8 +1,10 @@
 #include <gtest/gtest.h>
 
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <future>
+#include <thread>
 #include <vector>
 
 #include "halcyon/async.hpp"
@@ -61,4 +63,43 @@ TEST(AsyncWithConnection, RunsQueryOnPooledConnection) {
     auto r = f.get();
     ASSERT_TRUE(r.ok());
     EXPECT_EQ(r.value(), 14);
+}
+
+// v1.2: destroying the executor ON one of its own workers (a user continuation
+// resumed on a worker can destroy the last Database copy) must not self-join.
+// The queue must still drain: joined workers exit only at stop-and-empty, and
+// the detached self keeps looping over the co-owned State after ~Executor.
+TEST(Executor, DestructionOnOwnWorkerDetachesAndDrainsQueue) {
+    auto* ex = new halcyon::Executor(1);
+    std::promise<void> gateEntered, gateRelease, drained;
+    auto gateEnteredF = gateEntered.get_future();
+    auto gateReleaseF = gateRelease.get_future();
+    auto drainedF = drained.get_future();
+
+    // Park the single worker so all three jobs are enqueued in order.
+    ex->submit([&] {
+        gateEntered.set_value();
+        gateReleaseF.wait();
+    });
+    ex->submit([&] { delete ex; });            // ~Executor runs ON the worker
+    ex->submit([&] { drained.set_value(); });  // enqueued-before-stop: must run
+
+    gateEnteredF.wait();
+    gateRelease.set_value();
+    ASSERT_EQ(drainedF.wait_for(std::chrono::seconds(5)),
+              std::future_status::ready)
+        << "queue not drained after teardown-on-worker";
+    // Give the detached worker a beat to exit its loop before gtest tears down.
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+}
+
+// Regression: off-worker destruction still joins and drains everything.
+TEST(Executor, DestructionOffWorkerJoinsAndDrains) {
+    std::atomic<int> ran{0};
+    {
+        halcyon::Executor ex(2);
+        for (int i = 0; i < 32; ++i)
+            ex.submit([&] { ++ran; });
+    }  // dtor joins both workers
+    EXPECT_EQ(ran.load(), 32);
 }
