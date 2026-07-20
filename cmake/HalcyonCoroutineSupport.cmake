@@ -29,12 +29,45 @@ struct Fire {
 };
 Fire f() { co_return; }
 int main() { f(); return 0; }
-" HALCYON_HAS_CXX20_COROUTINES)
+" HALCYON_CORO_PROBE_OK)
 set(CMAKE_REQUIRED_FLAGS "${_halcyon_saved_required_flags}")
 set(CMAKE_CXX_STANDARD "${_halcyon_saved_cxx_standard}")
 
+# The probe alone is not sufficient: a below-floor toolchain can compile the
+# tiny probe yet still lack the full, correct coroutine support the layer
+# relies on. Enforce the documented floor (GCC 11+, Clang 14+, AppleClang 14+)
+# explicitly, so such a compiler is skipped rather than enabled. An unknown
+# compiler that passes the probe is trusted (no version data to gate on).
+set(_halcyon_coro_floor_ok TRUE)
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    if(CMAKE_CXX_COMPILER_VERSION VERSION_LESS 11)
+        set(_halcyon_coro_floor_ok FALSE)
+    endif()
+elseif(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+    if(CMAKE_CXX_COMPILER_VERSION VERSION_LESS 14)
+        set(_halcyon_coro_floor_ok FALSE)
+    endif()
+elseif(CMAKE_CXX_COMPILER_ID STREQUAL "AppleClang")
+    if(CMAKE_CXX_COMPILER_VERSION VERSION_LESS 14)
+        set(_halcyon_coro_floor_ok FALSE)
+    endif()
+endif()
+
+if(HALCYON_CORO_PROBE_OK AND _halcyon_coro_floor_ok)
+    set(HALCYON_HAS_CXX20_COROUTINES TRUE)
+else()
+    set(HALCYON_HAS_CXX20_COROUTINES FALSE)
+endif()
+
 if(NOT HALCYON_HAS_CXX20_COROUTINES)
-    message(STATUS
-        "Halcyon: no usable C++20 coroutine support (floor: GCC 11+/Clang 14+/"
-        "AppleClang 14+); coroutine tests and examples will be skipped")
+    if(HALCYON_CORO_PROBE_OK AND NOT _halcyon_coro_floor_ok)
+        message(STATUS
+            "Halcyon: ${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION} is "
+            "below the documented C++20 coroutine floor (GCC 11+/Clang 14+/"
+            "AppleClang 14+); coroutine tests and examples will be skipped")
+    else()
+        message(STATUS
+            "Halcyon: no usable C++20 coroutine support (floor: GCC 11+/Clang 14+/"
+            "AppleClang 14+); coroutine tests and examples will be skipped")
+    endif()
 endif()
