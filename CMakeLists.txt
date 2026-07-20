@@ -42,6 +42,7 @@ set(HALCYON_SANITIZER "" CACHE STRING
 set_property(CACHE HALCYON_SANITIZER PROPERTY STRINGS "" thread address undefined)
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
+include(HalcyonCoroutineSupport)
 find_package(DB2CLI REQUIRED)
 
 # Bake the Db2 CLI driver lib dir into every binary's RPATH so executables

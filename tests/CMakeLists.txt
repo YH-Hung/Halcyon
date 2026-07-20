@@ -84,3 +84,16 @@ endif()
 if(HALCYON_BUILD_STRESS_TESTS)
     add_subdirectory(stress)
 endif()
+
+# ---- C++20 coroutine-layer tests (opt-in header; skipped without support) ----
+if(HALCYON_HAS_CXX20_COROUTINES)
+    add_executable(halcyon_coro_tests
+        unit/test_coro_task.cpp)
+    target_link_libraries(halcyon_coro_tests
+        PRIVATE halcyon::halcyon GTest::gtest_main Threads::Threads)
+    target_compile_features(halcyon_coro_tests PRIVATE cxx_std_20)
+    target_compile_options(halcyon_coro_tests PRIVATE -Wall -Wextra -Wpedantic)
+    target_include_directories(halcyon_coro_tests
+        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/unit)
+    gtest_discover_tests(halcyon_coro_tests)
+endif()
