@@ -7,7 +7,7 @@ public C++ API (see "Versioning & compatibility" in the README).
 
 ## Unreleased
 
-## 1.2.0 - 2026-07-20
+## 1.2.0 - 2026-07-21
 
 Coroutines & async streaming. The compiled library still targets C++17;
 `halcyon/coro.hpp` is a C++20 opt-in header outside the `halcyon.hpp`
@@ -39,6 +39,18 @@ umbrella (toolchain floor for it: GCC 11+, Clang 14+, AppleClang 14+).
   across teardown. Behavior-compatible.
 - `docs/guide/async.md` no longer claims streaming cursors cannot cross
   threads; the documented contract is coordinated, never-concurrent use.
+
+### Fixed
+- `executeAsync`/`queryAsync` named-params overloads, dropped in the
+  `Executor` split, are restored.
+- Async future APIs (`executeAsync`/`queryAsync`) now materialize owning
+  copies of their arguments at the call site instead of holding views that
+  could dangle by the time the queued job runs.
+- `ConnectionPool` records its busy high-water mark before releasing the
+  validate-on-acquire lock, so the stat can no longer be missed under
+  contention.
+- The C++20 coroutine compiler floor (GCC 11+, Clang 14+, AppleClang 14+) is
+  now enforced by the build, not just probed.
 
 ## 1.1.0 - 2026-07-13
 
