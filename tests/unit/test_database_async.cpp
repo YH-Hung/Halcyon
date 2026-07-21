@@ -342,3 +342,31 @@ TEST(DatabaseAsync, QueryAsyncOwnsTransientStringViewArg) {
     EXPECT_TRUE(found);
     std::this_thread::sleep_for(std::chrono::milliseconds(20));
 }
+
+// v1.2 review: the future APIs must still accept named `params`. The P1
+// owning-args fix routed every non-LOB arg through to_value(), but `params`
+// is an owning dispatch object, not a bindable value — it needs its own
+// overload (regression coverage for both APIs).
+TEST(DatabaseAsync, ExecuteAsyncNamedParams) {
+    MockCliDriver driver;
+    driver.execRowCounts.push_back(1);
+    auto db = Database::open(driver, "X", noThread()).value();
+    auto r = db.executeAsync("UPDATE t SET a=:v WHERE id=:id",
+                             halcyon::params{{"v", 10}, {"id", 3}})
+                 .get();
+    ASSERT_TRUE(r.ok()) << r.error().message;
+    EXPECT_EQ(driver.preparedSql.at(0), "UPDATE t SET a=? WHERE id=?");
+}
+
+TEST(DatabaseAsync, QueryAsyncNamedParams) {
+    MockCliDriver driver;
+    driver.resultSets.push_back(MockCliDriver::ScriptedRows{
+        {"n"}, {{halcyon::detail::cli::Value{std::int64_t{9}}}}});
+    auto db = Database::open(driver, "X", noThread()).value();
+    auto r = db.queryAsync<Num>("SELECT n FROM t WHERE id=:id",
+                                halcyon::params{{"id", 1}})
+                 .get();
+    ASSERT_TRUE(r.ok()) << r.error().message;
+    ASSERT_EQ(r.value().size(), 1u);
+    EXPECT_EQ(r.value()[0].n, 9);
+}

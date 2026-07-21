@@ -659,6 +659,33 @@ public:
                     parent.get());
             });
     }
+    // Named-parameter async execute. `params` is an OWNING dispatch object (it
+    // already holds its values), not a bindable value — it must NOT go through
+    // the positional owning-args path (own_arg/to_value); it is captured as-is
+    // and routed to Connection's named overload.
+    std::future<Result<std::int64_t>> executeAsync(const std::string& sql,
+                                                   params named) {
+        if (!exec_)
+            return detail::ready_invalid_state_future<Result<std::int64_t>>();
+        auto parent = has_tracer_ ? tracer_->captureContext()
+                                  : std::shared_ptr<obs::SpanContext>{};
+        return exec_->submit(
+            [backing = detail::AsyncCallBacking{owned_driver_, pool_},
+             attempts = default_attempts_, parent = std::move(parent), sql,
+             named = std::move(named)]() {
+                auto& pool = *backing.pool;
+                return instrument(
+                    pool.metrics(), pool.tracer(), pool.metrics_enabled(),
+                    pool.tracer_enabled(), "halcyon.execute", sql,
+                    [&] {
+                        return run_with_policy_on(
+                            pool, default_policy_for(pool, attempts, sql),
+                            [&](Connection& c) { return c.execute(sql, named); },
+                            pool.metrics(), pool.metrics_enabled());
+                    },
+                    parent.get());
+            });
+    }
     // Typed async query (spec §5): materializes rows into std::vector<T> so the
     // future carries no pool-lease lifetime. (Streaming async over a live cursor
     // is a documented non-goal/future extension.)
@@ -689,6 +716,35 @@ public:
                                         return c.template queryAs<T>(sql, vs...);
                                     },
                                     owned);
+                            },
+                            pool.metrics(), pool.metrics_enabled());
+                    },
+                    parent.get());
+            });
+    }
+    // Named-parameter async query (see the executeAsync params overload: the
+    // owning `params` object is captured as-is, not through the owning-args
+    // path).
+    template <class T>
+    std::future<Result<std::vector<T>>> queryAsync(const std::string& sql,
+                                                   params named) {
+        if (!exec_)
+            return detail::ready_invalid_state_future<Result<std::vector<T>>>();
+        auto parent = has_tracer_ ? tracer_->captureContext()
+                                  : std::shared_ptr<obs::SpanContext>{};
+        return exec_->submit(
+            [backing = detail::AsyncCallBacking{owned_driver_, pool_},
+             attempts = default_attempts_, parent = std::move(parent), sql,
+             named = std::move(named)]() {
+                auto& pool = *backing.pool;
+                return instrument(
+                    pool.metrics(), pool.tracer(), pool.metrics_enabled(),
+                    pool.tracer_enabled(), "halcyon.query", sql,
+                    [&] {
+                        return run_with_policy_on(
+                            pool, default_policy_for(pool, attempts, sql),
+                            [&](Connection& c) {
+                                return c.template queryAs<T>(sql, named);
                             },
                             pool.metrics(), pool.metrics_enabled());
                     },
